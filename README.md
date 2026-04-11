@@ -68,6 +68,14 @@ https://github.com/M-A-L-bl-LLl/NoMorePainEditor.git
 }
 ```
 
+**Через скачивание релиза:**
+
+1. Перейдите на страницу [Releases](https://github.com/M-A-L-bl-LLl/NoMorePainEditor/releases) и скачайте архив последней версии
+2. Распакуйте архив в любую папку на вашем компьютере
+3. Откройте `Window → Package Manager`
+4. Нажмите **+** → `Add package from disk...`
+5. Укажите путь до файла `package.json` внутри распакованной папки
+
 **Требования:** Unity 2021.3+
 
 ---
@@ -136,6 +144,14 @@ https://github.com/M-A-L-bl-LLl/NoMorePainEditor.git
   }
 }
 ```
+
+**Via release download:**
+
+1. Go to [Releases](https://github.com/M-A-L-bl-LLl/NoMorePainEditor/releases) and download the latest archive
+2. Extract the archive to any folder on your machine
+3. Open `Window → Package Manager`
+4. Click **+** → `Add package from disk...`
+5. Select the `package.json` file inside the extracted folder
 
 **Requirements:** Unity 2021.3+
 
