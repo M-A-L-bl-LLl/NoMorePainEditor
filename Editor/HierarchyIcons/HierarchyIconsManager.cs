@@ -16,6 +16,7 @@ namespace NoMorePain.Editor
         private const int   MaxRightIcons = 7;
         private const float IconSize      = 15f;
         private const float IconSpacing   = 1f;
+        private const float IndentWidth   = 14f;
 
         private struct RightIcon
         {
@@ -79,6 +80,9 @@ namespace NoMorePain.Editor
             // ── Color fill (behind everything) ────────────────────────
             HierarchyColorManager.DrawForItem(globalId, rowRect);
 
+            // ── Tree lines ────────────────────────────────────────────
+            DrawHierarchyLines(go.transform, rowRect);
+
             // ── Alt + LMB → color picker ──────────────────────────────
             if (Event.current.type == EventType.MouseDown &&
                 Event.current.button == 0 &&
@@ -121,6 +125,58 @@ namespace NoMorePain.Editor
 
             if (data.rightIcons.Length > 0)
                 DrawRightIcons(data.rightIcons, rowRect, alpha);
+        }
+
+        // ─────────────────────────────────────────────────────────────
+        //  Tree lines
+        // ─────────────────────────────────────────────────────────────
+
+        private static void DrawHierarchyLines(Transform transform, Rect rowRect)
+        {
+            if (Event.current.type != EventType.Repaint) return;
+            if (transform.parent == null) return;
+
+            // Build ancestor chain bottom-up, then reverse:
+            // chain[0] = shallowest ancestor (depth 1), chain[last] = transform itself
+            var chain = new System.Collections.Generic.List<Transform>();
+            var t = transform;
+            while (t.parent != null) { chain.Add(t); t = t.parent; }
+            chain.Reverse();
+
+            int   depth  = chain.Count;
+            float midY   = rowRect.y + rowRect.height * 0.5f;
+            var   color  = EditorGUIUtility.isProSkin
+                ? new Color(1f, 1f, 1f, 0.18f)
+                : new Color(0f, 0f, 0f, 0.22f);
+
+            for (int i = 0; i < chain.Count; i++)
+            {
+                int   d      = i + 1; // 1-based depth of this node
+                // Line center is at the PARENT's expand-arrow center; subtract 1 so the 2px line is centred on it
+                float lineX  = rowRect.x + (d - depth) * IndentWidth - IndentWidth * 1.5f - 1f;
+                bool  isLast = chain[i].GetSiblingIndex() == chain[i].parent.childCount - 1;
+                bool  isCur  = (i == chain.Count - 1);
+
+                // Horizontal ends with a 4px gap before the current item's expand arrow
+                float arrowCenterX = rowRect.x - IndentWidth * 0.5f - 4f;
+
+                if (isCur)
+                {
+                    // Vertical top: stops 1px above the horizontal
+                    EditorGUI.DrawRect(new Rect(lineX, rowRect.y, 2f, midY - rowRect.y - 1f), color);
+                    // Horizontal: from lineX to the expand arrow center
+                    EditorGUI.DrawRect(new Rect(lineX, midY - 1f, arrowCenterX - lineX, 2f), color);
+                    // Vertical bottom: continues down if not last sibling
+                    if (!isLast)
+                        EditorGUI.DrawRect(new Rect(lineX, midY + 1f, 2f, rowRect.yMax - midY - 1f), color);
+                }
+                else
+                {
+                    // Full-height pass-through vertical line if ancestor is not last child
+                    if (!isLast)
+                        EditorGUI.DrawRect(new Rect(lineX, rowRect.y, 2f, rowRect.height), color);
+                }
+            }
         }
 
         // ─────────────────────────────────────────────────────────────
