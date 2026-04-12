@@ -1,7 +1,7 @@
 {
   "name": "com.nomorepain.editor",
   "version": "1.0.1",
-  "displayName": "No More Pain",
+  "displayName": "No More Pain Editor",
   "description": "Unity Editor productivity tools: Inspector Tabs, Play Mode Save, Component Copy/Paste and more.",
   "unity": "2021.3",
   "keywords": [
@@ -14,6 +14,5 @@
   "author": {
     "name": "NoMorePain Contributors",
     "url": "https://github.com/your-repo/no-more-pain"
-  },
-  "dependencies": {}
+  }
 }
