@@ -18,11 +18,6 @@ namespace NoMorePain.Editor
             IsPro ? new Color(0.25f, 0.55f, 1.00f)
                   : new Color(0.20f, 0.47f, 0.95f);
 
-        // Slightly tinted strip background
-        private static Color StripBgColor =>
-            IsPro ? new Color(0.15f, 0.18f, 0.24f)
-                  : new Color(0.70f, 0.75f, 0.85f);
-
         // Active tab fill
         private static Color ActiveTabBgColor =>
             IsPro ? new Color(0.17f, 0.36f, 0.68f, 0.55f)
@@ -37,6 +32,10 @@ namespace NoMorePain.Editor
         private static Color NavButtonTextColor =>
             IsPro ? new Color(0.65f, 0.82f, 1.00f)
                   : new Color(0.10f, 0.30f, 0.70f);
+
+        private static Color StripBgColor =>
+            IsPro ? new Color(0.19f, 0.19f, 0.19f, 1f)
+                  : new Color(0.70f, 0.70f, 0.70f, 1f);
 
         // ── Tab strip background ─────────────────────────────────────
         private static GUIStyle _tabStrip;
@@ -212,6 +211,62 @@ namespace NoMorePain.Editor
                     };
                 }
                 return _toolbarButton;
+            }
+        }
+
+        // ── Toolbar button content-only (no background, same layout as ToolbarButton) ──
+        private static GUIStyle _toolbarButtonLabel;
+
+        public static GUIStyle ToolbarButtonLabel
+        {
+            get
+            {
+                if (_toolbarButtonLabel == null)
+                {
+                    // Base on GUIStyle.none so there are zero background textures —
+                    // miniButton base keeps scaled backgrounds that cover the color rect.
+                    var src = EditorStyles.miniButton;
+                    _toolbarButtonLabel = new GUIStyle(GUIStyle.none)
+                    {
+                        padding       = src.padding,
+                        margin        = src.margin,
+                        alignment     = TextAnchor.MiddleLeft,
+                        imagePosition = ImagePosition.ImageLeft,
+                        fixedHeight   = 0,
+                        clipping      = TextClipping.Clip,
+                        fontSize      = src.fontSize,
+                        fontStyle     = src.fontStyle,
+                    };
+                    _toolbarButtonLabel.normal.textColor = Color.white;
+                    _toolbarButtonLabel.hover.textColor  = Color.white;
+                    _toolbarButtonLabel.active.textColor = Color.white;
+                }
+                return _toolbarButtonLabel;
+            }
+        }
+
+        // ── Icon-only button (no background, just the image) ──────────
+        private static GUIStyle _iconButton;
+
+        public static GUIStyle IconButton
+        {
+            get
+            {
+                if (_iconButton == null)
+                {
+                    _iconButton = new GUIStyle(GUIStyle.none)
+                    {
+                        fixedHeight  = 0,
+                        fixedWidth   = 0,
+                        padding      = new RectOffset(0, 0, 0, 0),
+                        margin       = new RectOffset(0, 0, 0, 0),
+                        imagePosition = ImagePosition.ImageOnly,
+                        alignment    = TextAnchor.MiddleCenter,
+                    };
+                    _iconButton.hover.textColor  = AccentColor;
+                    _iconButton.active.textColor = AccentColor;
+                }
+                return _iconButton;
             }
         }
 

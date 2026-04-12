@@ -59,6 +59,12 @@ namespace NoMorePain.Editor
             set => Set("Hierarchy.Folders",        value);
         }
 
+        public static bool HierarchyFolderNavbar
+        {
+            get => Get("Hierarchy.FolderNavbar",   true);
+            set => Set("Hierarchy.FolderNavbar",   value);
+        }
+
         // ── Inspector ─────────────────────────────────────────────────
         public static bool InspectorTabs
         {

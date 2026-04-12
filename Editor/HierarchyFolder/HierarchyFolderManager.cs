@@ -20,6 +20,12 @@ namespace NoMorePain.Editor
 
         private static readonly HashSet<string> _folders = new();
 
+        /// <summary>Fired whenever folder registry changes (mark/unmark/load).</summary>
+        internal static event System.Action OnFolderDataChanged;
+
+        /// <summary>All registered folder GlobalObjectId strings.</summary>
+        internal static IReadOnlyCollection<string> FolderIds => _folders;
+
         static HierarchyFolderManager()
         {
             LoadData();
@@ -94,6 +100,7 @@ namespace NoMorePain.Editor
             data.ids.AddRange(_folders);
             try { File.WriteAllText(DataPath, JsonUtility.ToJson(data, true)); }
             catch (Exception e) { Debug.LogWarning($"[NoMorePain] Failed to save folders: {e.Message}"); }
+            OnFolderDataChanged?.Invoke();
         }
 
         private static void LoadData()
@@ -107,6 +114,7 @@ namespace NoMorePain.Editor
                     _folders.Add(id);
             }
             catch (Exception e) { Debug.LogWarning($"[NoMorePain] Failed to load folders: {e.Message}"); }
+            OnFolderDataChanged?.Invoke();
         }
     }
 }
