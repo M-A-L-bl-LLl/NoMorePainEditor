@@ -25,7 +25,8 @@ namespace NoMorePain.Editor
             LoadData();
         }
 
-        internal static bool IsFolder(string globalId) => _folders.Contains(globalId);
+        internal static bool IsFolder(string globalId) =>
+            NMPSettings.HierarchyFolders && _folders.Contains(globalId);
 
         // ── Menu items ────────────────────────────────────────────────
 

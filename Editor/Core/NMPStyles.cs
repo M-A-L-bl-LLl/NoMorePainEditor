@@ -161,6 +161,60 @@ namespace NoMorePain.Editor
             }
         }
 
+        // ── Accent button (Copy / primary action) ────────────────────
+        private static GUIStyle _accentButton;
+        private static Texture2D _accentButtonBg;
+        private static Texture2D _accentButtonHoverBg;
+
+        public static GUIStyle AccentButton
+        {
+            get
+            {
+                if (_accentButton == null)
+                {
+                    var c  = AccentColor;
+                    _accentButtonBg      = MakeTex(IsPro ? new Color(c.r * 0.28f, c.g * 0.28f, c.b * 0.28f, 1f)
+                                                         : new Color(c.r, c.g, c.b, 0.18f));
+                    _accentButtonHoverBg = MakeTex(IsPro ? new Color(c.r * 0.42f, c.g * 0.42f, c.b * 0.42f, 1f)
+                                                         : new Color(c.r, c.g, c.b, 0.32f));
+
+                    _accentButton = new GUIStyle(EditorStyles.miniButton)
+                    {
+                        fontStyle     = FontStyle.Bold,
+                        imagePosition = ImagePosition.ImageLeft,
+                        alignment     = TextAnchor.MiddleLeft,
+                        padding       = new RectOffset(8, 8, 2, 2),
+                        fixedHeight   = 22
+                    };
+                    _accentButton.normal.background = _accentButtonBg;
+                    _accentButton.hover.background  = _accentButtonHoverBg;
+                    _accentButton.active.background = _accentButtonHoverBg;
+                    _accentButton.normal.textColor  = IsPro ? new Color(0.72f, 0.88f, 1.00f) : c;
+                    _accentButton.hover.textColor   = IsPro ? Color.white                     : c;
+                    _accentButton.active.textColor  = IsPro ? Color.white                     : c;
+                }
+                return _accentButton;
+            }
+        }
+
+        // ── Toolbar button (miniButton without fixedHeight so GUILayout.Height works) ──
+        private static GUIStyle _toolbarButton;
+
+        public static GUIStyle ToolbarButton
+        {
+            get
+            {
+                if (_toolbarButton == null)
+                {
+                    _toolbarButton = new GUIStyle(EditorStyles.miniButton)
+                    {
+                        fixedHeight = 0,
+                    };
+                }
+                return _toolbarButton;
+            }
+        }
+
         // ─────────────────────────────────────────────────────────────
         private static Texture2D MakeTex(Color color)
         {

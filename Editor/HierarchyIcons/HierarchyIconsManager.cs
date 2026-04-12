@@ -7,264 +7,461 @@ namespace NoMorePain.Editor
     /// <summary>
     /// Hierarchy Icons:
     ///   • Replaces the default cube on the LEFT with the primary component icon.
-    ///   • Draws additional component icons on the RIGHT — click any to open a quick-edit window.
+    ///   • Draws component icons on the RIGHT — click any to open a quick-edit window.
+    ///   • Disabled components render at reduced opacity.
+    ///   • Tag / Layer badges shown for non-default values.
+    ///   • Zebra striping for readability.
     /// Transform is always skipped. Cache clears on hierarchy change.
     /// </summary>
     [InitializeOnLoad]
     internal static class HierarchyIconsManager
     {
+        // ── Layout constants ──────────────────────────────────────────────────
         private const int   MaxRightIcons = 7;
         private const float IconSize      = 15f;
         private const float IconSpacing   = 1f;
         private const float IndentWidth   = 14f;
+        private const float MinNameWidth  = 80f;
+        private const float DisabledAlpha = 0.35f;
+        private const float InactiveAlpha = 0.40f;
 
-        private struct RightIcon
-        {
-            public GUIContent content;
-            public int        componentId;
-        }
-
-        private struct IconData
-        {
-            public Texture     primary;
-            public RightIcon[] rightIcons;
-        }
-
-        private static readonly Dictionary<int, IconData> _cache = new();
-        private static Texture _folderIcon;
+        // ── Bootstrap ─────────────────────────────────────────────────────────
 
         static HierarchyIconsManager()
         {
             EditorApplication.hierarchyWindowItemOnGUI += OnHierarchyItemGUI;
-            EditorApplication.hierarchyChanged         += ClearCache;
+            EditorApplication.hierarchyChanged         += IconCache.Clear;
+            // postprocessModifications fires before the new value is committed,
+            // so defer the repaint one frame via delayCall.
+            Undo.postprocessModifications += OnUndoModification;
         }
 
-        private static void ClearCache() => _cache.Clear();
-        internal static void InvalidateCache() => _cache.Clear();
+        private static UndoPropertyModification[] OnUndoModification(UndoPropertyModification[] mods)
+        {
+            EditorApplication.delayCall += EditorApplication.RepaintHierarchyWindow;
+            return mods;
+        }
+
+        // ── Public API ────────────────────────────────────────────────────────
+
+        internal static void InvalidateCache() => IconCache.Clear();
 
         /// <summary>
-        /// Returns the primary icon for a GameObject using the same priority as the Hierarchy:
-        /// custom icon → collider → first component.
+        /// Returns the primary icon for a GameObject:
+        /// custom icon → collider icon → first component icon.
         /// </summary>
         internal static Texture GetPrimaryIcon(GameObject go)
         {
-            Texture primary = EditorGUIUtility.GetIconForObject(go);
+            Texture icon = EditorGUIUtility.GetIconForObject(go);
+            if (icon != null) return icon;
 
-            if (primary == null)
+            var collider = go.GetComponent<Collider>();
+            if (collider != null) { icon = ResolveComponentIcon(collider); if (icon != null) return icon; }
+
+            foreach (var comp in go.GetComponents<Component>())
             {
-                var collider = go.GetComponent<Collider>();
-                if (collider != null)
-                    primary = GetIcon(collider);
+                if (comp == null || comp is Transform) continue;
+                icon = ResolveComponentIcon(comp);
+                if (icon != null) return icon;
             }
 
-            if (primary == null)
-            {
-                foreach (var comp in go.GetComponents<Component>())
-                {
-                    if (comp == null || comp is Transform) continue;
-                    var icon = GetIcon(comp);
-                    if (icon != null) { primary = icon; break; }
-                }
-            }
-
-            return primary;
+            return null;
         }
+
+        // ── Main GUI callback ─────────────────────────────────────────────────
 
         private static void OnHierarchyItemGUI(int instanceId, Rect rowRect)
         {
             var go = EditorUtility.InstanceIDToObject(instanceId) as GameObject;
             if (go == null) return;
 
-            var globalId = GlobalObjectId.GetGlobalObjectIdSlow(go).ToString();
+            var   globalId = GlobalObjectId.GetGlobalObjectIdSlow(go).ToString();
+            float alpha    = go.activeInHierarchy ? 1f : InactiveAlpha;
 
-            // ── Color fill (behind everything) ────────────────────────
-            HierarchyColorManager.DrawForItem(globalId, rowRect);
+            if (NMPSettings.HierarchyZebra)       Zebra.Draw(rowRect);
+            if (NMPSettings.HierarchyColors)      HierarchyColorManager.DrawForItem(globalId, rowRect);
+            if (NMPSettings.HierarchyTreeLines)   TreeLines.Draw(go.transform, rowRect);
+                                                  HandleColorPickerClick(go, rowRect);
+            if (NMPSettings.HierarchyActiveToggle) DrawActiveToggle(go, rowRect);
 
-            // ── Tree lines ────────────────────────────────────────────
-            DrawHierarchyLines(go.transform, rowRect);
-
-            // ── Alt + LMB → color picker ──────────────────────────────
-            if (Event.current.type == EventType.MouseDown &&
-                Event.current.button == 0 &&
-                Event.current.alt &&
-                rowRect.Contains(Event.current.mousePosition))
-            {
-                var screenPos = GUIUtility.GUIToScreenPoint(Event.current.mousePosition);
-                HierarchyColorPickerWindow.Open(new[] { go }, screenPos);
-                Event.current.Use();
-            }
-
-            float alpha = go.activeInHierarchy ? 1f : 0.4f;
-
-            DrawActiveToggle(go, rowRect);
-
-            // ── Folder: draw folder icon, skip component icons ────────
             if (HierarchyFolderManager.IsFolder(globalId))
             {
-                if (_folderIcon == null)
-                    _folderIcon = EditorGUIUtility.IconContent("Folder Icon").image;
-
-                if (_folderIcon != null)
-                    DrawObjectIcon(go, rowRect, _folderIcon, alpha, globalId);
-
-                DrawHighlightLabel(go, rowRect, globalId, alpha);
+                DrawFolderRow(go, rowRect, globalId, alpha);
                 return;
             }
 
-            // ── Normal object ─────────────────────────────────────────
-            if (!_cache.TryGetValue(instanceId, out var data))
-            {
-                data = BuildData(go);
-                _cache[instanceId] = data;
-            }
+            DrawNormalRow(go, instanceId, rowRect, globalId, alpha);
+        }
 
-            if (data.primary != null)
-                DrawObjectIcon(go, rowRect, data.primary, alpha, globalId);
+        private static void DrawFolderRow(GameObject go, Rect rowRect, string globalId, float alpha)
+        {
+            var icon = IconCache.FolderIcon;
+            if (icon != null && NMPSettings.HierarchyLeftIcon)
+                DrawObjectIcon(go, rowRect, icon, alpha, globalId);
+            DrawHighlightLabel(go, rowRect, globalId, alpha);
+        }
+
+        private static void DrawNormalRow(GameObject go, int instanceId, Rect rowRect, string globalId, float alpha)
+        {
+            var data   = IconCache.GetOrBuild(instanceId, go);
+            var layout = new RowLayout(go, data.RightIcons, rowRect);
+
+            if (data.Primary != null && NMPSettings.HierarchyLeftIcon)
+                DrawObjectIcon(go, rowRect, data.Primary, alpha, globalId);
 
             DrawHighlightLabel(go, rowRect, globalId, alpha);
 
-            if (data.rightIcons.Length > 0)
-                DrawRightIcons(data.rightIcons, rowRect, alpha);
+            if (layout.MaxIcons > 0 && NMPSettings.HierarchyRightIcons)
+                DrawRightIcons(data.RightIcons, rowRect, alpha, layout.MaxIcons);
+
+            if (layout.ShowBadges && NMPSettings.HierarchyTagLayerBadges)
+                Badge.Draw(go, rowRect, alpha, layout.BadgeRightEdge);
         }
 
-        // ─────────────────────────────────────────────────────────────
-        //  Tree lines
-        // ─────────────────────────────────────────────────────────────
+        // ── Color picker interaction ──────────────────────────────────────────
 
-        private static void DrawHierarchyLines(Transform transform, Rect rowRect)
+        private static void HandleColorPickerClick(GameObject go, Rect rowRect)
         {
-            if (Event.current.type != EventType.Repaint) return;
-            if (transform.parent == null) return;
+            if (!NMPSettings.HierarchyColors) return;
+            var evt = Event.current;
+            if (evt.type != EventType.MouseDown || evt.button != 0 || !evt.alt) return;
+            if (!rowRect.Contains(evt.mousePosition)) return;
 
-            // Build ancestor chain bottom-up, then reverse:
-            // chain[0] = shallowest ancestor (depth 1), chain[last] = transform itself
-            var chain = new System.Collections.Generic.List<Transform>();
-            var t = transform;
-            while (t.parent != null) { chain.Add(t); t = t.parent; }
-            chain.Reverse();
+            HierarchyColorPickerWindow.Open(new[] { go }, GUIUtility.GUIToScreenPoint(evt.mousePosition));
+            evt.Use();
+        }
 
-            int   depth  = chain.Count;
-            float midY   = rowRect.y + rowRect.height * 0.5f;
-            var   color  = EditorGUIUtility.isProSkin
-                ? new Color(1f, 1f, 1f, 0.18f)
-                : new Color(0f, 0f, 0f, 0.22f);
+        // ═════════════════���════════════════════════════════════════════════════
+        //  Data types
+        // ══════════════════════════════════════════════════════════════════════
 
-            for (int i = 0; i < chain.Count; i++)
+        private readonly struct RightIcon
+        {
+            public readonly GUIContent Content;
+            public readonly int        ComponentId;
+
+            public RightIcon(Texture icon, int componentId, string tooltip)
             {
-                int   d      = i + 1; // 1-based depth of this node
-                // Line center is at the PARENT's expand-arrow center; subtract 1 so the 2px line is centred on it
-                float lineX  = rowRect.x + (d - depth) * IndentWidth - IndentWidth * 1.5f - 1f;
-                bool  isLast = chain[i].GetSiblingIndex() == chain[i].parent.childCount - 1;
-                bool  isCur  = (i == chain.Count - 1);
+                Content     = new GUIContent(string.Empty, icon, tooltip);
+                ComponentId = componentId;
+            }
+        }
 
-                // Horizontal ends with a 4px gap before the current item's expand arrow
-                float arrowCenterX = rowRect.x - IndentWidth * 0.5f - 4f;
+        private readonly struct IconData
+        {
+            public readonly Texture     Primary;
+            public readonly RightIcon[] RightIcons;
 
-                if (isCur)
+            public IconData(Texture primary, RightIcon[] rightIcons)
+            {
+                Primary    = primary;
+                RightIcons = rightIcons;
+            }
+        }
+
+        /// <summary>
+        /// Pre-computes row layout so OnHierarchyItemGUI has no inline arithmetic.
+        /// </summary>
+        private readonly struct RowLayout
+        {
+            public readonly int   MaxIcons;
+            public readonly bool  ShowBadges;
+            public readonly float BadgeRightEdge;
+
+            public RowLayout(GameObject go, RightIcon[] icons, Rect rowRect)
+            {
+                float nameStartX  = rowRect.x + rowRect.height;
+                float available   = rowRect.xMax - nameStartX - MinNameWidth;
+
+                MaxIcons = icons.Length > 0
+                    ? Mathf.Clamp(Mathf.FloorToInt(available / (IconSize + IconSpacing)), 0, icons.Length)
+                    : 0;
+
+                float iconsTotalW = MaxIcons * (IconSize + IconSpacing);
+                float badgeW      = Badge.Measure(go);
+                ShowBadges        = badgeW > 0 && (available - iconsTotalW) >= badgeW;
+                BadgeRightEdge    = rowRect.xMax - iconsTotalW;
+            }
+        }
+
+        // ════════════════════════════════���═════════════════════════════════════
+        //  Cache
+        // ══════════════════════════════════════════════════════════════════════
+
+        private static class IconCache
+        {
+            private static readonly Dictionary<int, IconData> _items = new();
+            private static Texture _folderIcon;
+
+            public static Texture FolderIcon =>
+                _folderIcon ??= EditorGUIUtility.IconContent("Folder Icon").image;
+
+            public static void Clear() => _items.Clear();
+
+            public static IconData GetOrBuild(int instanceId, GameObject go)
+            {
+                if (!_items.TryGetValue(instanceId, out var data))
+                    _items[instanceId] = data = BuildData(go);
+                return data;
+            }
+
+            private static IconData BuildData(GameObject go)
+            {
+                var components = go.GetComponents<Component>();
+                var right      = new List<RightIcon>(components.Length);
+
+                // Priority: custom icon → collider icon → first component icon
+                Texture primary = EditorGUIUtility.GetIconForObject(go);
+
+                if (primary == null)
                 {
-                    // Vertical top: stops 1px above the horizontal
-                    EditorGUI.DrawRect(new Rect(lineX, rowRect.y, 2f, midY - rowRect.y - 1f), color);
-                    // Horizontal: from lineX to the expand arrow center
-                    EditorGUI.DrawRect(new Rect(lineX, midY - 1f, arrowCenterX - lineX, 2f), color);
-                    // Vertical bottom: continues down if not last sibling
-                    if (!isLast)
-                        EditorGUI.DrawRect(new Rect(lineX, midY + 1f, 2f, rowRect.yMax - midY - 1f), color);
+                    var collider = go.GetComponent<Collider>();
+                    if (collider != null) primary = ResolveComponentIcon(collider);
                 }
-                else
+
+                foreach (var comp in components)
                 {
-                    // Full-height pass-through vertical line if ancestor is not last child
-                    if (!isLast)
+                    if (comp == null || comp is Transform) continue;
+                    var icon = ResolveComponentIcon(comp);
+                    if (icon == null) continue;
+                    if (primary == null) primary = icon;
+                    right.Add(new RightIcon(icon, comp.GetInstanceID(), ObjectNames.GetInspectorTitle(comp)));
+                    if (right.Count >= MaxRightIcons) break;
+                }
+
+                return new IconData(primary, right.ToArray());
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        //  Theme — all colors in one place
+        // ══════════════════════════════════════════════════════════════════════
+
+        private static class Theme
+        {
+            // Skin-aware: accessed as properties so isProSkin is evaluated at draw time
+            public static Color ZebraStripe   => EditorGUIUtility.isProSkin ? new Color(1f, 1f, 1f, 0.07f) : new Color(0f, 0f, 0f, 0.07f);
+            public static Color TreeLine      => EditorGUIUtility.isProSkin ? new Color(1f, 1f, 1f, 0.18f) : new Color(0f, 0f, 0f, 0.22f);
+            public static Color DefaultRowBg  => EditorGUIUtility.isProSkin ? new Color(0.22f, 0.22f, 0.22f) : new Color(0.76f, 0.76f, 0.76f);
+            public static Color SelectionBg   => EditorGUIUtility.isProSkin ? new Color(0.17f, 0.36f, 0.53f) : new Color(0.23f, 0.45f, 0.69f);
+
+            public static Color RowBg(GameObject go) =>
+                Selection.Contains(go) ? SelectionBg : DefaultRowBg;
+
+            // Fixed colors (skin-independent)
+            public static readonly Color TagBadge    = new Color(0.55f, 0.28f, 0.10f, 0.55f);
+            public static readonly Color LayerBadge  = new Color(0.15f, 0.40f, 0.60f, 0.55f);
+            public static readonly Color IconHover   = new Color(1f, 1f, 1f, 0.15f);
+            public static readonly Color HighlightTint = new Color(1f, 1f, 1f, 0.00f); // placeholder used via TryGetColor
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        //  GUIColor scope — restores GUI.color on dispose
+        // ═════════════════════════════════════════════��════════════════════════
+
+        private readonly struct GUIColorScope : System.IDisposable
+        {
+            private readonly Color _previous;
+            public GUIColorScope(Color color) { _previous = GUI.color; GUI.color = color; }
+            public void Dispose() => GUI.color = _previous;
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        //  Zebra striping
+        // ══════════════════════════════════════════════════════════════════════
+
+        private static class Zebra
+        {
+            public static void Draw(Rect rowRect)
+            {
+                if (Event.current.type != EventType.Repaint) return;
+                if (Mathf.RoundToInt(rowRect.y / rowRect.height) % 2 == 0) return;
+                EditorGUI.DrawRect(new Rect(0, rowRect.y, Screen.width, rowRect.height), Theme.ZebraStripe);
+            }
+        }
+
+        // ══════════════════════════════════════════════════════��═══════════════
+        //  Tree lines
+        // ══════════════════════════════════════════════════════════════════════
+
+        private static class TreeLines
+        {
+            public static void Draw(Transform transform, Rect rowRect)
+            {
+                if (Event.current.type != EventType.Repaint) return;
+                if (transform.parent == null) return;
+
+                var   chain = BuildAncestorChain(transform);
+                int   depth = chain.Count;
+                float midY  = rowRect.y + rowRect.height * 0.5f;
+                var   color = Theme.TreeLine;
+
+                for (int i = 0; i < chain.Count; i++)
+                {
+                    float lineX    = rowRect.x + (i + 1 - depth) * IndentWidth - IndentWidth * 1.5f - 1f;
+                    bool  isLast   = chain[i].GetSiblingIndex() == chain[i].parent.childCount - 1;
+                    bool  isCurrent = i == chain.Count - 1;
+
+                    if (isCurrent)
+                        DrawCurrentNodeLines(rowRect, lineX, midY, color, isLast);
+                    else if (!isLast)
                         EditorGUI.DrawRect(new Rect(lineX, rowRect.y, 2f, rowRect.height), color);
                 }
             }
-        }
 
-        // ─────────────────────────────────────────────────────────────
-        //  Active / inactive toggle
-        // ─────────────────────────────────────────────────────────────
-
-        private static void DrawActiveToggle(GameObject go, Rect rowRect)
-        {
-            float size       = rowRect.height;
-            var   toggleRect = new Rect(32f, rowRect.y + (size - 13f) * 0.5f, 13f, 13f);
-
-            EditorGUI.BeginChangeCheck();
-            bool newValue = GUI.Toggle(toggleRect, go.activeSelf, GUIContent.none);
-            if (EditorGUI.EndChangeCheck())
+            private static List<Transform> BuildAncestorChain(Transform transform)
             {
-                Undo.RecordObject(go, newValue ? "Enable GameObject" : "Disable GameObject");
-                go.SetActive(newValue);
-                EditorUtility.SetDirty(go);
+                var chain = new List<Transform>();
+                var t = transform;
+                while (t.parent != null) { chain.Add(t); t = t.parent; }
+                chain.Reverse();
+                return chain;
+            }
+
+            private static void DrawCurrentNodeLines(Rect rowRect, float lineX, float midY, Color color, bool isLast)
+            {
+                float arrowCenterX = rowRect.x - IndentWidth * 0.5f - 4f;
+                EditorGUI.DrawRect(new Rect(lineX, rowRect.y,   2f,                     midY - rowRect.y - 1f), color);
+                EditorGUI.DrawRect(new Rect(lineX, midY - 1f,   arrowCenterX - lineX,   2f),                   color);
+                if (!isLast)
+                    EditorGUI.DrawRect(new Rect(lineX, midY + 1f, 2f, rowRect.yMax - midY - 1f), color);
             }
         }
 
-        // ─────────────────────────────────────────────────────────────
-        //  Left icon
-        // ─────────────────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════════
+        //  Tag / Layer badges
+        // ══════════════════════════════════════════════════════════════════════
+
+        private static class Badge
+        {
+            private const float HPad = 4f;
+            private const float Gap  = 3f;
+
+            private static GUIStyle _style;
+            private static GUIStyle Style => _style ??= new GUIStyle(EditorStyles.miniLabel)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                clipping  = TextClipping.Clip,
+            };
+
+            /// <summary>Returns total pixel width needed for all visible badges, or 0 if none.</summary>
+            public static float Measure(GameObject go)
+            {
+                float total = 0f;
+                if (go.layer != 0)        total += BadgeWidth(LayerMask.LayerToName(go.layer));
+                if (go.tag != "Untagged") total += BadgeWidth(go.tag);
+                return total;
+            }
+
+            public static void Draw(GameObject go, Rect rowRect, float alpha, float rightEdge)
+            {
+                float x      = rightEdge;
+                float badgeH = rowRect.height - 4f;
+                float badgeY = rowRect.y + 2f;
+
+                // Layer badge is closest to the component icons
+                if (go.layer != 0)
+                    DrawOne(new GUIContent(LayerMask.LayerToName(go.layer)), Theme.LayerBadge, ref x, badgeY, badgeH, alpha);
+                if (go.tag != "Untagged")
+                    DrawOne(new GUIContent(go.tag), Theme.TagBadge, ref x, badgeY, badgeH, alpha);
+            }
+
+            private static void DrawOne(GUIContent content, Color bgColor, ref float x, float y, float h, float alpha)
+            {
+                float w = Style.CalcSize(content).x + HPad * 2f;
+                x -= w + Gap;
+
+                if (Event.current.type != EventType.Repaint) return;
+
+                EditorGUI.DrawRect(new Rect(x, y, w, h),
+                    new Color(bgColor.r, bgColor.g, bgColor.b, bgColor.a * alpha));
+
+                using (new GUIColorScope(new Color(1f, 1f, 1f, alpha)))
+                    GUI.Label(new Rect(x, y, w, h), content, Style);
+            }
+
+            private static float BadgeWidth(string text) =>
+                Style.CalcSize(new GUIContent(text)).x + HPad * 2f + Gap;
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        //  Draw helpers
+        // ══════════════════════════════════════════════════════════════════════
+
+        private static void DrawActiveToggle(GameObject go, Rect rowRect)
+        {
+            var fullRowRect = new Rect(0, rowRect.y, Screen.width, rowRect.height);
+            if (!fullRowRect.Contains(Event.current.mousePosition)) return;
+
+            var toggleRect = new Rect(32f, rowRect.y + (rowRect.height - 13f) * 0.5f, 13f, 13f);
+            EditorGUI.BeginChangeCheck();
+            bool newValue = GUI.Toggle(toggleRect, go.activeSelf, GUIContent.none);
+            if (!EditorGUI.EndChangeCheck()) return;
+
+            Undo.RecordObject(go, newValue ? "Enable GameObject" : "Disable GameObject");
+            go.SetActive(newValue);
+            EditorUtility.SetDirty(go);
+        }
 
         private static void DrawObjectIcon(GameObject go, Rect rowRect, Texture icon, float alpha, string globalId)
         {
-            float size   = rowRect.height;
-            var iconRect = new Rect(rowRect.x, rowRect.y, size, size);
+            var iconRect = new Rect(rowRect.x, rowRect.y, rowRect.height, rowRect.height);
+            EditorGUI.DrawRect(iconRect, Theme.RowBg(go));
 
-            EditorGUI.DrawRect(iconRect, GetRowBgColor(go));
+            // Re-apply zebra tint — solid RowBg above would otherwise cover it
+            if (NMPSettings.HierarchyZebra && Mathf.RoundToInt(rowRect.y / rowRect.height) % 2 != 0)
+                EditorGUI.DrawRect(iconRect, Theme.ZebraStripe);
 
-            if (HierarchyColorManager.TryGetColor(globalId, out var hlColor))
+            if (NMPSettings.HierarchyColors && HierarchyColorManager.TryGetColor(globalId, out var hlColor))
                 EditorGUI.DrawRect(iconRect, new Color(hlColor.r, hlColor.g, hlColor.b, 0.30f));
 
-            var prev = GUI.color;
-            GUI.color = new Color(1f, 1f, 1f, alpha);
-            GUI.DrawTexture(iconRect, icon, ScaleMode.ScaleToFit);
-            GUI.color = prev;
+            using (new GUIColorScope(new Color(1f, 1f, 1f, alpha)))
+                GUI.DrawTexture(iconRect, icon, ScaleMode.ScaleToFit);
         }
 
-        private static Color GetRowBgColor(GameObject go)
+        private static GUIStyle _highlightLabel;
+
+        private static void DrawHighlightLabel(GameObject go, Rect rowRect, string globalId, float alpha)
         {
-            bool selected = Selection.Contains(go);
-            if (selected)
-                return EditorGUIUtility.isProSkin
-                    ? new Color(0.17f, 0.36f, 0.53f)
-                    : new Color(0.23f, 0.45f, 0.69f);
+            if (Event.current.type != EventType.Repaint) return;
+            if (!NMPSettings.HierarchyColors) return;
+            if (!HierarchyColorManager.TryGetColor(globalId, out var hlColor)) return;
 
-            return EditorGUIUtility.isProSkin
-                ? new Color(0.22f, 0.22f, 0.22f)
-                : new Color(0.76f, 0.76f, 0.76f);
+            _highlightLabel ??= new GUIStyle(EditorStyles.label) { fontStyle = FontStyle.Bold };
+            _highlightLabel.normal.textColor = new Color(1f, 1f, 1f, alpha);
+
+            var textRect = new Rect(rowRect.x + rowRect.height, rowRect.y, Screen.width, rowRect.height);
+            EditorGUI.DrawRect(textRect, Theme.RowBg(go));
+            EditorGUI.DrawRect(textRect, new Color(hlColor.r, hlColor.g, hlColor.b, 0.30f));
+            GUI.Label(textRect, go.name, _highlightLabel);
         }
 
-        // ─────────────────────────────────────────────────────────────
-        //  Right icons with click support
-        // ─────────────────────────────────────────────────────────────
-
-        private static void DrawRightIcons(RightIcon[] icons, Rect rowRect, float alpha)
+        private static void DrawRightIcons(RightIcon[] icons, Rect rowRect, float alpha, int maxVisible)
         {
             float x   = rowRect.xMax - IconSize;
             float y   = rowRect.y + (rowRect.height - IconSize) * 0.5f;
             var   evt = Event.current;
 
-            for (int i = 0; i < icons.Length; i++)
+            for (int i = 0; i < maxVisible; i++)
             {
-                var iconRect = new Rect(x, y, IconSize, IconSize);
+                var   comp      = EditorUtility.InstanceIDToObject(icons[i].ComponentId) as Component;
+                float iconAlpha = (comp == null || IsComponentEnabled(comp)) ? alpha : alpha * DisabledAlpha;
+                var   iconRect  = new Rect(x, y, IconSize, IconSize);
+                bool  hovered   = iconRect.Contains(evt.mousePosition);
 
-                bool hovered = iconRect.Contains(evt.mousePosition);
                 if (hovered && evt.type == EventType.Repaint)
-                    EditorGUI.DrawRect(iconRect, new Color(1f, 1f, 1f, 0.15f));
+                    EditorGUI.DrawRect(iconRect, Theme.IconHover);
 
-                var prev = GUI.color;
-                GUI.color = new Color(1f, 1f, 1f, alpha);
-                GUI.DrawTexture(iconRect, icons[i].content.image, ScaleMode.ScaleToFit);
-                GUI.color = prev;
+                using (new GUIColorScope(new Color(1f, 1f, 1f, iconAlpha)))
+                    GUI.DrawTexture(iconRect, icons[i].Content.image, ScaleMode.ScaleToFit);
 
                 if (hovered)
-                    GUI.Label(iconRect, icons[i].content);
+                    GUI.Label(iconRect, icons[i].Content); // renders tooltip
 
                 if (hovered && evt.type == EventType.MouseDown && evt.button == 0)
                 {
-                    var comp = EditorUtility.InstanceIDToObject(icons[i].componentId) as Component;
                     if (comp != null)
-                    {
-                        var screenPos = GUIUtility.GUIToScreenPoint(evt.mousePosition);
-                        ComponentQuickEditWindow.Open(comp, screenPos);
-                    }
+                        ComponentQuickEditWindow.Open(comp, GUIUtility.GUIToScreenPoint(evt.mousePosition));
                     evt.Use();
                 }
 
@@ -272,72 +469,23 @@ namespace NoMorePain.Editor
             }
         }
 
-        // ─────────────────────────────────────────────────────────────
-        //  Highlight label
-        // ─────────────────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════════
+        //  Component utilities
+        // ══════════════════════════════════════════════════════════════════════
 
-        private static GUIStyle _highlightLabel;
-
-        private static void DrawHighlightLabel(GameObject go, Rect rowRect, string globalId, float alpha)
+        /// <summary>
+        /// Returns false only when the component has an enabled toggle AND it is off.
+        /// Behaviour, Renderer and Collider each have .enabled but share no common base.
+        /// </summary>
+        private static bool IsComponentEnabled(Component comp)
         {
-            if (Event.current.type != EventType.Repaint) return;
-            if (!HierarchyColorManager.TryGetColor(globalId, out var hlColor)) return;
-
-            if (_highlightLabel == null)
-                _highlightLabel = new GUIStyle(EditorStyles.label) { fontStyle = FontStyle.Bold };
-
-            _highlightLabel.normal.textColor = new Color(1f, 1f, 1f, alpha);
-
-            float iconW    = rowRect.height;
-            var   textRect = new Rect(rowRect.x + iconW, rowRect.y, Screen.width, rowRect.height);
-
-            EditorGUI.DrawRect(textRect, GetRowBgColor(go));
-            EditorGUI.DrawRect(textRect, new Color(hlColor.r, hlColor.g, hlColor.b, 0.30f));
-            GUI.Label(textRect, go.name, _highlightLabel);
+            if (comp is Behaviour b) return b.enabled;
+            if (comp is Renderer  r) return r.enabled;
+            if (comp is Collider  c) return c.enabled;
+            return true;
         }
 
-        // ─────────────────────────────────────────────────────────────
-        //  Data building
-        // ─────────────────────────────────────────────────────────────
-
-        private static IconData BuildData(GameObject go)
-        {
-            var components = go.GetComponents<Component>();
-            var right      = new List<RightIcon>(components.Length);
-
-            // Priority: custom icon → collider icon → first component icon
-            Texture primary = EditorGUIUtility.GetIconForObject(go);
-
-            if (primary == null)
-            {
-                var collider = go.GetComponent<Collider>();
-                if (collider != null)
-                    primary = GetIcon(collider);
-            }
-
-            foreach (var comp in components)
-            {
-                if (comp == null || comp is Transform) continue;
-
-                var icon = GetIcon(comp);
-                if (icon == null) continue;
-
-                if (primary == null)
-                    primary = icon;
-
-                right.Add(new RightIcon
-                {
-                    content     = new GUIContent(string.Empty, icon, ObjectNames.GetInspectorTitle(comp)),
-                    componentId = comp.GetInstanceID()
-                });
-
-                if (right.Count >= MaxRightIcons) break;
-            }
-
-            return new IconData { primary = primary, rightIcons = right.ToArray() };
-        }
-
-        private static Texture GetIcon(Component comp)
+        private static Texture ResolveComponentIcon(Component comp)
         {
             var content = EditorGUIUtility.ObjectContent(comp, comp.GetType());
             if (content?.image != null) return content.image;

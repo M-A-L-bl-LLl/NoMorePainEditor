@@ -23,39 +23,64 @@ namespace NoMorePain.Editor
 
         private static void OnInspectorHeaderGUI(UnityEditor.Editor editor)
         {
+            bool showCopyPaste = NMPSettings.ComponentCopyPaste;
+            bool showTabs      = NMPSettings.InspectorTabs;
+
+            if (!showCopyPaste && !showTabs) return;
             if (editor.target is not GameObject go) return;
+
+            var baseColor = GUI.color;
 
             using (new EditorGUILayout.HorizontalScope())
             {
+                // < > nav buttons from InspectorTabsManager share this row
+                InspectorTabsManager.DrawInlineNavButtons();
+
                 GUILayout.FlexibleSpace();
 
-                // Copy button - opens component picker popup
-                var copyRect = GUILayoutUtility.GetRect(
-                    new GUIContent("Copy Components"),
-                    EditorStyles.miniButton,
-                    GUILayout.Width(118));
+                // Add Tab / Remove — isolated on the left of Copy group
+                InspectorTabsManager.DrawInlinePinButton();
 
-                if (GUI.Button(copyRect, new GUIContent("Copy Components", "Select components to copy to clipboard"), EditorStyles.miniButton))
-                    PopupWindow.Show(copyRect, new ComponentPickerPopup(go));
+                if (!showCopyPaste) return;
 
-                // Paste button - visible when clipboard has data
+                GUILayout.Space(8f);
+
+                // Copy button — icon drawn manually at larger size
+                if (GUILayout.Button(new GUIContent("    Copy", "Select components to copy to clipboard"),
+                        NMPStyles.ToolbarButton, GUILayout.Width(72), GUILayout.Height(NMPStyles.TabHeight + 8f)))
+                    PopupWindow.Show(GUILayoutUtility.GetLastRect(), new ComponentPickerPopup(go));
+
+                if (Event.current.type == EventType.Repaint)
+                {
+                    var btnRect  = GUILayoutUtility.GetLastRect();
+                    var copyIcon = EditorGUIUtility.IconContent("d_TreeEditor.Duplicate").image;
+                    if (copyIcon != null)
+                    {
+                        const float iconSize = 18f;
+                        var iconRect = new Rect(
+                            btnRect.x + 5f,
+                            btnRect.y + (btnRect.height - iconSize) * 0.5f,
+                            iconSize, iconSize);
+                        GUI.DrawTexture(iconRect, copyIcon, ScaleMode.ScaleToFit);
+                    }
+                }
+
+                // Paste + Clear — visible when clipboard has data
                 if (Clipboard.Count > 0)
                 {
-                    var pasteLabel = $"Paste ({Clipboard.Count})";
-                    var pasteTooltip = BuildPasteTooltip();
-
-                    if (GUILayout.Button(new GUIContent(pasteLabel, pasteTooltip), EditorStyles.miniButton, GUILayout.Width(70)))
+                    if (GUILayout.Button(new GUIContent($"Paste ({Clipboard.Count})", BuildPasteTooltip()),
+                            NMPStyles.ToolbarButton, GUILayout.Width(84), GUILayout.Height(NMPStyles.TabHeight + 8f)))
                     {
                         var targets = Selection.gameObjects;
                         if (targets.Length == 0) targets = new[] { go };
                         PasteComponents(targets);
                     }
 
-                    var prevColor = GUI.color;
-                    GUI.color = new Color(1f, 0.35f, 0.35f);
-                    if (GUILayout.Button(new GUIContent("✕", "Clear component clipboard"), EditorStyles.miniButton, GUILayout.Width(20)))
+                    GUI.color = new Color(1f, 0.45f, 0.45f);
+                    if (GUILayout.Button(new GUIContent("✕", "Clear clipboard"),
+                            NMPStyles.ToolbarButton, GUILayout.Width(26), GUILayout.Height(NMPStyles.TabHeight + 8f)))
                         Clipboard.Clear();
-                    GUI.color = prevColor;
+                    GUI.color = baseColor;
                 }
             }
         }
@@ -181,9 +206,9 @@ namespace NoMorePain.Editor
 
             using (new EditorGUILayout.HorizontalScope())
             {
-                if (GUILayout.Button("All", EditorStyles.miniButton))
+                if (GUILayout.Button("All", NMPStyles.ToolbarButton))
                     for (int i = 0; i < _selected.Length; i++) _selected[i] = true;
-                if (GUILayout.Button("None", EditorStyles.miniButton))
+                if (GUILayout.Button("None", NMPStyles.ToolbarButton))
                     for (int i = 0; i < _selected.Length; i++) _selected[i] = false;
             }
 
@@ -192,7 +217,7 @@ namespace NoMorePain.Editor
             int count = CountSelected();
             using (new EditorGUI.DisabledScope(count == 0))
             {
-                if (GUILayout.Button($"Copy {(count > 0 ? count.ToString() : "")} Component(s)", EditorStyles.miniButton))
+                if (GUILayout.Button($"Copy {(count > 0 ? count.ToString() : "")} Component(s)", NMPStyles.ToolbarButton))
                 {
                     CopySelected();
                     editorWindow.Close();

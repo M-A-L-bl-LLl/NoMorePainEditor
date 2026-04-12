@@ -9,42 +9,68 @@
 
 ### Возможности
 
-#### Иерархия — иконки компонентов
+#### Иерархия — Auto GameObject Icon
 Заменяет стандартный куб на иконку основного компонента объекта.  
-Приоритет: кастомная иконка → коллайдер → первый компонент.  
-Справа отображаются иконки всех остальных компонентов — нажмите на любую, чтобы открыть окно быстрого редактирования.
+Приоритет: кастомная иконка → коллайдер → первый компонент.
 
-#### Иерархия — подсветка цветом
+#### Иерархия — Иконки компонентов справа
+Справа в строке объекта отображаются иконки всех компонентов.  
+Нажмите на любую — откроется всплывающее окно с полным инспектором компонента и тоглом включения/выключения.
+
+#### Иерархия — Бейджи Tag / Layer
+Показывает нестандартный тег и слой объекта в виде цветных бейджей прямо в иерархии.
+
+#### Иерархия — Зебра
+Чередующаяся подсветка строк для удобного визуального разделения объектов.
+
+#### Иерархия — Линии дерева
+Рисует линии, соединяющие родительские и дочерние объекты.
+
+#### Иерархия — Тогл активности
+Чекбокс включения/выключения объекта появляется при наведении курсора на строку в иерархии.
+
+#### Иерархия — Подсветка цветом
 Выделяет строки объектов полупрозрачным цветом с акцентной полосой слева.  
 - **Alt + ЛКМ** по объекту — открыть палитру цветов  
 - **ПКМ → Highlight Color...** — то же через контекстное меню  
-- Поддержка кастомного цвета и выбора иконки из всех компонентов Unity  
 - Данные сохраняются в `ProjectSettings/NoMorePainColors.json`
 
-#### Иерархия — папки
-Создаёт папки в иерархии.  
+#### Иерархия — Папки
+Создаёт визуальные папки в иерархии.  
 - **ПКМ → Create Folder** — создать папку  
 - **ПКМ → Mark as Folder / Unmark as Folder** — пометить/убрать метку с любого объекта  
 - Данные сохраняются в `ProjectSettings/NoMorePainFolders.json`
 
-#### Иерархия — линии дерева
-Рисует линии, соединяющие родительские и дочерние объекты.
-
 #### Табы инспектора
-Полоска закреплённых объектов в верхней части инспектора.  
-- Нажмите **+** чтобы закрепить текущий объект  
+Полоска закреплённых объектов в верхней части инспектора. Табы сохраняются отдельно для каждой сцены.  
+- Кнопка **Add Tab** — закрепить текущий объект  
+- Кнопка **Remove** — открепить текущий объект  
 - Перетащите любой объект на полоску  
-- Кнопки **< >** для навигации  
+- Кнопки **< >** для навигации между табами  
+- **ПКМ** по табу — удалить или пинговать объект  
 - Данные сохраняются в `ProjectSettings/NoMorePainTabs.json`
 
-#### Быстрое редактирование компонента
-Нажмите на иконку компонента справа в иерархии — откроется всплывающее окно с полным инспектором компонента и тоглом включения/выключения.
-
 #### Копирование/вставка компонентов
-Копирует значения полей компонента и вставляет их в компонент того же типа на другом объекте.
+Пакетное копирование и вставка компонентов между объектами.  
+- Кнопка **Copy** — открывает список компонентов объекта с чекбоксами для выбора  
+- Кнопка **Paste (N)** — вставляет скопированные компоненты на все выделенные объекты  
+  - Если компонент уже есть — перезаписывает значения  
+  - Если нет — добавляет новый  
+- Кнопка **✕** — очищает буфер обмена  
+- Полная поддержка Undo
 
 #### Сохранение в Play Mode
-Сохраняет выбранные значения компонентов между входом и выходом из Play Mode.
+Сохраняет значения компонентов в Play Mode и восстанавливает их после выхода.  
+- Кнопка **Save** в заголовке инспектора (только в Play Mode) — зафиксировать текущие значения  
+- Кнопка **✕** — отменить снимок  
+- Восстановление с поддержкой Undo
+
+---
+
+### Настройки
+
+Все функции можно включать и выключать по отдельности:  
+`Tools → No More Pain → Settings`
 
 ---
 
@@ -86,42 +112,68 @@ https://github.com/M-A-L-bl-LLl/NoMorePainEditor.git
 
 ### Features
 
-#### Hierarchy — Component Icons
+#### Hierarchy — Auto GameObject Icon
 Replaces the default cube with the primary component icon.  
-Priority: custom icon → collider → first component.  
-Additional component icons are shown on the right — click any to open a quick-edit window.
+Priority: custom icon → collider → first component.
 
-#### Hierarchy — Color Highlight
-Highlights object rows with a semi-transparent color and a solid accent stripe on the left.  
-- **Alt + LMB** on any object — open the color picker  
-- **Right-click → Highlight Color...** — same via context menu  
-- Supports custom colors and icon selection from all Unity components  
-- Data is saved to `ProjectSettings/NoMorePainColors.json`
+#### Hierarchy — Right Component Icons
+Component icons are shown on the right side of each hierarchy row.  
+Click any icon to open a floating inspector for that component with an enable/disable toggle.
 
-#### Hierarchy — Folders
-Creates folders in the hierarchy.  
-- **Right-click → Create Folder** — create a new folder  
-- **Right-click → Mark as Folder / Unmark as Folder** — tag any existing object as a folder  
-- Data is saved to `ProjectSettings/NoMorePainFolders.json`
+#### Hierarchy — Tag / Layer Badges
+Shows non-default tags and layers as colored badges directly in the Hierarchy.
+
+#### Hierarchy — Zebra Striping
+Alternating row tint for easier visual scanning.
 
 #### Hierarchy — Tree Lines
 Draws lines connecting parent and child objects.
 
+#### Hierarchy — Active Toggle
+An enable/disable checkbox appears on hover for each object row.
+
+#### Hierarchy — Row Colors
+Highlights object rows with a semi-transparent color and a solid accent stripe on the left.  
+- **Alt + LMB** on any object — open the color picker  
+- **Right-click → Highlight Color...** — same via context menu  
+- Data is saved to `ProjectSettings/NoMorePainColors.json`
+
+#### Hierarchy — Folders
+Creates visual folders in the hierarchy.  
+- **Right-click → Create Folder** — create a new folder  
+- **Right-click → Mark as Folder / Unmark as Folder** — tag any existing object as a folder  
+- Data is saved to `ProjectSettings/NoMorePainFolders.json`
+
 #### Inspector Tabs
-A pinned-objects strip at the top of the Inspector.  
-- Click **+** to pin the current object  
+A pinned-objects strip at the top of the Inspector. Tabs are saved per scene.  
+- **Add Tab** button — pin the current object  
+- **Remove** button — unpin the current object  
 - Drag any object onto the strip  
-- Use **< >** buttons to navigate between pinned objects   
+- **< >** buttons to navigate between tabs  
+- **Right-click** a tab — remove or ping the object  
 - Data is saved to `ProjectSettings/NoMorePainTabs.json`
 
-#### Component Quick Edit
-Click a component icon in the Hierarchy to open a floating inspector for that component with an enable/disable toggle.
-
 #### Component Copy / Paste
-Copy field values from one component and paste them into a component of the same type on another object.
+Batch copy and paste components between GameObjects.  
+- **Copy** button — opens a component picker with checkboxes  
+- **Paste (N)** button — pastes all copied components to every selected object  
+  - Existing component: overwrites values  
+  - Missing component: adds it  
+- **✕** button — clears the clipboard  
+- Full Undo support
 
 #### Play Mode Save
-Preserves selected component values when exiting Play Mode.
+Captures component values during Play Mode and restores them on exit.  
+- **Save** button in the Inspector header (Play Mode only) — capture current values  
+- **✕** button — discard the snapshot  
+- Restore with full Undo support
+
+---
+
+### Settings
+
+Each feature can be toggled independently:  
+`Tools → No More Pain → Settings`
 
 ---
 

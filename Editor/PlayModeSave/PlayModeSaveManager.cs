@@ -63,6 +63,7 @@ namespace NoMorePain.Editor
 
         private static void OnInspectorHeaderGUI(UnityEditor.Editor editor)
         {
+            if (!NMPSettings.PlayModeSave) return;
             if (!EditorApplication.isPlaying) return;
             if (editor.target is not GameObject go) return;
             if (!go.scene.IsValid()) return; // Skip project assets

@@ -2,13 +2,16 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
+using UnityEditor.SceneManagement;
+using UnityEditorInternal;
 using UnityEngine;
 
 namespace NoMorePain.Editor
 {
     /// <summary>
     /// Inspector Tabs - Draws a pinned-objects strip directly inside the Inspector.
-    /// Click "+" to pin the current object. Click a tab icon to switch the Inspector to it.
+    /// Tabs are saved per scene. Click "+" to pin the current object.
+    /// Click a tab icon to switch the Inspector to it.
     /// Right-click a tab to remove or ping it. Drag any object onto the strip to add it.
     /// </summary>
     [InitializeOnLoad]
@@ -22,26 +25,65 @@ namespace NoMorePain.Editor
         }
 
         [Serializable]
-        private class PinnedData
+        private class SceneTabData
         {
+            public string scenePath;
             public List<PinnedEntry> pinned = new List<PinnedEntry>();
+        }
+
+        [Serializable]
+        private class AllTabsData
+        {
+            public List<SceneTabData> scenes = new List<SceneTabData>();
         }
 
         private static readonly string DataPath = Path.GetFullPath(
             Path.Combine(Application.dataPath, "../ProjectSettings/NoMorePainTabs.json"));
 
-        private static PinnedData _data = new PinnedData();
+        private static AllTabsData _allData = new AllTabsData();
+
+        // ─────────────────────────────────────────────────────────────
+        //  Current scene helpers
+        // ─────────────────────────────────────────────────────────────
+
+        private static string CurrentSceneKey =>
+            UnityEngine.SceneManagement.SceneManager.GetActiveScene().path;
+
+        private static List<PinnedEntry> CurrentPinned
+        {
+            get
+            {
+                var key  = CurrentSceneKey;
+                var data = _allData.scenes.Find(s => s.scenePath == key);
+                if (data == null)
+                {
+                    data = new SceneTabData { scenePath = key };
+                    _allData.scenes.Add(data);
+                }
+                return data.pinned;
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────
+        //  Init
+        // ─────────────────────────────────────────────────────────────
 
         static InspectorTabsManager()
         {
             UnityEditor.Editor.finishedDefaultHeaderGUI += OnInspectorHeaderGUI;
+            EditorSceneManager.activeSceneChangedInEditMode += OnSceneChanged;
             LoadData();
+        }
+
+        private static void OnSceneChanged(UnityEngine.SceneManagement.Scene _, UnityEngine.SceneManagement.Scene __)
+        {
+            _scrollPos = Vector2.zero;
+            InternalEditorUtility.RepaintAllViews();
         }
 
         private static void OnInspectorHeaderGUI(UnityEditor.Editor editor)
         {
-            // Draw the strip once per inspector refresh — only for the primary selected object.
-            // Component inspectors have editor.target == the component, not the selected object.
+            if (!NMPSettings.InspectorTabs) return;
             if (editor.target != Selection.activeObject) return;
 
             DrawTabStrip(editor.target);
@@ -53,14 +95,61 @@ namespace NoMorePain.Editor
 
         private static Vector2 _scrollPos;
 
+        // Stored each frame so ComponentCopyPasteManager can call inline draw methods
+        private static string              _navCurrentId;
+        private static List<PinnedEntry>   _navPinned;
+        private static UnityEngine.Object  _navCurrentObj;
+        private static bool                _navIsPinned;
+
+        /// <summary>Draws &lt; &gt; nav buttons inline inside another manager's toolbar row.</summary>
+        internal static void DrawInlineNavButtons()
+        {
+            if (!NMPSettings.InspectorTabs) return;
+            if (_navPinned == null) return;
+            DrawNavButton("<", () => NavigateTab(_navCurrentId, -1, _navPinned));
+            DrawNavButton(">", () => NavigateTab(_navCurrentId, +1, _navPinned));
+        }
+
+        /// <summary>Draws the Add Tab / Remove button inline inside another manager's toolbar row.</summary>
+        internal static void DrawInlinePinButton()
+        {
+            if (!NMPSettings.InspectorTabs) return;
+            if (_navPinned == null || _navCurrentObj == null) return;
+
+            if (_navIsPinned)
+            {
+                if (GUILayout.Button(new GUIContent("− Remove", "Remove current object from tabs"),
+                        NMPStyles.ToolbarButton, GUILayout.Height(NMPStyles.TabHeight + 8f)))
+                {
+                    _navPinned.RemoveAll(p => p.globalId == _navCurrentId);
+                    SaveData();
+                }
+            }
+            else
+            {
+                if (GUILayout.Button(new GUIContent("+ Add Tab", "Pin current object to tabs"),
+                        NMPStyles.ToolbarButton, GUILayout.Height(NMPStyles.TabHeight + 8f)))
+                {
+                    PinObject(_navCurrentObj, _navPinned);
+                    SaveData();
+                }
+            }
+        }
+
         private static void DrawTabStrip(UnityEngine.Object currentObj)
         {
+            var pinned    = CurrentPinned;
             var currentId = GlobalObjectId.GetGlobalObjectIdSlow(currentObj).ToString();
-            bool currentIsPinned = _data.pinned.Exists(p => p.globalId == currentId);
+            bool currentIsPinned = pinned.Exists(p => p.globalId == currentId);
+
+            _navCurrentId  = currentId;
+            _navPinned     = pinned;
+            _navCurrentObj = currentObj;
+            _navIsPinned   = currentIsPinned;
 
             // Outer strip row — background + drop target
             var stripRect = EditorGUILayout.BeginHorizontal(NMPStyles.TabStrip, GUILayout.Height(NMPStyles.TabHeight));
-            HandleDrop(stripRect);
+            HandleDrop(stripRect, pinned);
 
             // Convert vertical scroll wheel → horizontal scroll when hovering the strip
             var evt = Event.current;
@@ -70,14 +159,11 @@ namespace NoMorePain.Editor
                 evt.Use();
             }
 
-            // < prev button
-            DrawNavButton("<", () => NavigateTab(currentId, -1));
-
-            // Scrollable tabs area (fills all space except the pin button)
+            // Scrollable tabs area
             _scrollPos = EditorGUILayout.BeginScrollView(
                 _scrollPos,
                 false, false,
-                GUIStyle.none, GUIStyle.none,   // hide both scrollbars
+                GUIStyle.none, GUIStyle.none,
                 GUIStyle.none,
                 GUILayout.Height(NMPStyles.TabHeight));
 
@@ -85,12 +171,12 @@ namespace NoMorePain.Editor
 
             string pendingRemoveId = null;
 
-            for (int i = 0; i < _data.pinned.Count; i++)
+            for (int i = 0; i < pinned.Count; i++)
             {
-                var entry = _data.pinned[i];
+                var entry    = pinned[i];
                 bool isActive = entry.globalId == currentId;
 
-                if (DrawTab(entry, isActive, out string removeId))
+                if (DrawTab(entry, isActive, pinned, out string removeId))
                 {
                     var obj = ResolveEntry(entry);
                     if (obj != null) Selection.activeObject = obj;
@@ -102,26 +188,19 @@ namespace NoMorePain.Editor
 
             GUILayout.FlexibleSpace();
             EditorGUILayout.EndHorizontal();
-
             EditorGUILayout.EndScrollView();
-
-            // > next button
-            DrawNavButton(">", () => NavigateTab(currentId, +1));
-
-            // Pin button — always visible, outside the scroll area
-            DrawPinButton(currentObj, currentId, currentIsPinned);
 
             EditorGUILayout.EndHorizontal();
 
             if (pendingRemoveId != null)
             {
-                _data.pinned.RemoveAll(p => p.globalId == pendingRemoveId);
+                pinned.RemoveAll(p => p.globalId == pendingRemoveId);
                 SaveData();
             }
         }
 
         // Returns true when the tab was clicked. Sets removeId when user chose Remove.
-        private static bool DrawTab(PinnedEntry entry, bool isActive, out string removeId)
+        private static bool DrawTab(PinnedEntry entry, bool isActive, List<PinnedEntry> pinned, out string removeId)
         {
             removeId = null;
 
@@ -140,15 +219,15 @@ namespace NoMorePain.Editor
                 : entry.displayName;
 
             var content = new GUIContent(" " + label, icon, entry.displayName);
-            var style = isActive ? NMPStyles.ActiveTab : NMPStyles.InactiveTab;
-            var rect = GUILayoutUtility.GetRect(content, style,
+            var style   = isActive ? NMPStyles.ActiveTab : NMPStyles.InactiveTab;
+            var rect    = GUILayoutUtility.GetRect(content, style,
                 GUILayout.Height(NMPStyles.TabHeight), GUILayout.MaxWidth(110));
 
             // Accent underline for active tab
             if (isActive && Event.current.type == EventType.Repaint)
                 EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 2, rect.width, 2), NMPStyles.AccentColor);
 
-            // Right-click — must be checked BEFORE GUI.Button so we intercept it first
+            // Right-click context menu
             if (Event.current.type == EventType.MouseDown &&
                 Event.current.button == 1 &&
                 rect.Contains(Event.current.mousePosition))
@@ -157,6 +236,7 @@ namespace NoMorePain.Editor
 
                 var capturedId  = entry.globalId;
                 var capturedObj = obj;
+                var capturedList = pinned;
                 var menu = new GenericMenu();
 
                 if (capturedObj != null)
@@ -165,45 +245,43 @@ namespace NoMorePain.Editor
 
                 menu.AddItem(new GUIContent("Delete"), false, () =>
                 {
-                    _data.pinned.RemoveAll(p => p.globalId == capturedId);
+                    capturedList.RemoveAll(p => p.globalId == capturedId);
                     SaveData();
                 });
 
                 menu.ShowAsContext();
             }
 
-            bool clicked = GUI.Button(rect, content, style);
-
-            return clicked;
+            return GUI.Button(rect, content, style);
         }
 
         private static void DrawNavButton(string label, System.Action onClick)
         {
-            bool hasMultiple = _data.pinned.Count > 1;
+            bool hasMultiple = CurrentPinned.Count > 1;
             using (new EditorGUI.DisabledScope(!hasMultiple))
             {
-                if (GUILayout.Button(label, NMPStyles.PinButton, GUILayout.Width(18), GUILayout.ExpandHeight(true)))
+                if (GUILayout.Button(label, NMPStyles.ToolbarButton, GUILayout.Width(22), GUILayout.Height(NMPStyles.TabHeight + 8f)))
                     onClick();
             }
         }
 
-        private static void NavigateTab(string currentId, int direction)
+        private static void NavigateTab(string currentId, int direction, List<PinnedEntry> pinned)
         {
-            if (_data.pinned.Count == 0) return;
+            if (pinned.Count == 0) return;
 
-            int currentIndex = _data.pinned.FindIndex(p => p.globalId == currentId);
+            int currentIndex = pinned.FindIndex(p => p.globalId == currentId);
 
             int nextIndex;
             if (currentIndex < 0)
-                nextIndex = direction > 0 ? 0 : _data.pinned.Count - 1;
+                nextIndex = direction > 0 ? 0 : pinned.Count - 1;
             else
-                nextIndex = (currentIndex + direction + _data.pinned.Count) % _data.pinned.Count;
+                nextIndex = (currentIndex + direction + pinned.Count) % pinned.Count;
 
-            var obj = ResolveEntry(_data.pinned[nextIndex]);
+            var obj = ResolveEntry(pinned[nextIndex]);
             if (obj != null) Selection.activeObject = obj;
         }
 
-        private static void DrawPinButton(UnityEngine.Object obj, string globalId, bool isPinned)
+        private static void DrawPinButton(UnityEngine.Object obj, string globalId, bool isPinned, List<PinnedEntry> pinned)
         {
             var tooltip = isPinned ? "Remove current object from tabs" : "Pin current object to tabs";
             var label   = isPinned ? "−" : "+";
@@ -214,9 +292,9 @@ namespace NoMorePain.Editor
                 GUILayout.ExpandHeight(true)))
             {
                 if (isPinned)
-                    _data.pinned.RemoveAll(p => p.globalId == globalId);
+                    pinned.RemoveAll(p => p.globalId == globalId);
                 else
-                    PinObject(obj);
+                    PinObject(obj, pinned);
 
                 SaveData();
             }
@@ -226,7 +304,7 @@ namespace NoMorePain.Editor
         //  Drag & drop
         // ─────────────────────────────────────────────────────────────
 
-        private static void HandleDrop(Rect stripRect)
+        private static void HandleDrop(Rect stripRect, List<PinnedEntry> pinned)
         {
             var evt = Event.current;
             if (!stripRect.Contains(evt.mousePosition)) return;
@@ -238,7 +316,7 @@ namespace NoMorePain.Editor
             {
                 DragAndDrop.AcceptDrag();
                 foreach (var o in DragAndDrop.objectReferences)
-                    PinObject(o);
+                    PinObject(o, pinned);
                 SaveData();
                 evt.Use();
             }
@@ -248,12 +326,12 @@ namespace NoMorePain.Editor
         //  Helpers
         // ─────────────────────────────────────────────────────────────
 
-        private static void PinObject(UnityEngine.Object obj)
+        private static void PinObject(UnityEngine.Object obj, List<PinnedEntry> pinned)
         {
             if (obj == null) return;
             var globalId = GlobalObjectId.GetGlobalObjectIdSlow(obj).ToString();
-            if (_data.pinned.Exists(p => p.globalId == globalId)) return;
-            _data.pinned.Add(new PinnedEntry { globalId = globalId, displayName = obj.name });
+            if (pinned.Exists(p => p.globalId == globalId)) return;
+            pinned.Add(new PinnedEntry { globalId = globalId, displayName = obj.name });
         }
 
         private static UnityEngine.Object ResolveEntry(PinnedEntry entry)
@@ -271,18 +349,18 @@ namespace NoMorePain.Editor
             try
             {
                 if (File.Exists(DataPath))
-                    _data = JsonUtility.FromJson<PinnedData>(File.ReadAllText(DataPath)) ?? new PinnedData();
+                    _allData = JsonUtility.FromJson<AllTabsData>(File.ReadAllText(DataPath)) ?? new AllTabsData();
             }
             catch (Exception e)
             {
                 Debug.LogWarning($"[NoMorePain] Failed to load tabs: {e.Message}");
-                _data = new PinnedData();
+                _allData = new AllTabsData();
             }
         }
 
         private static void SaveData()
         {
-            try { File.WriteAllText(DataPath, JsonUtility.ToJson(_data, true)); }
+            try { File.WriteAllText(DataPath, JsonUtility.ToJson(_allData, true)); }
             catch (Exception e) { Debug.LogWarning($"[NoMorePain] Failed to save tabs: {e.Message}"); }
         }
     }
