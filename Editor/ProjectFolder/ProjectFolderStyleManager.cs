@@ -36,12 +36,14 @@ namespace NoMorePain.Editor
             Path.Combine(Application.dataPath, "../ProjectSettings/NoMorePainProjectFolderStyles.json"));
 
         private static readonly Dictionary<string, Color>  Colors       = new();
+        private static readonly Dictionary<string, Color>  ColorsByPath = new(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, string> CustomIconId = new();
 
         private static readonly Dictionary<string, Texture2D> AutoBadgeCache   = new();
         private static readonly Dictionary<string, Texture2D> ResolveIconCache = new();
         private static readonly Dictionary<string, Texture2D> SolidTintIconCache = new();
         private static readonly Dictionary<string, string[]> SubFoldersCache = new();
+        private static Texture2D _defaultFolderTintSourceIcon;
         private static BadgeIconOption[] _iconOptions;
         private static Dictionary<string, Type> _typeByName;
         private static GUIStyle _coloredFolderLabelStyle;
@@ -56,6 +58,7 @@ namespace NoMorePain.Editor
 
         private static void OnProjectChanged()
         {
+            RebuildPathColorCache();
             AutoBadgeCache.Clear();
             ResolveIconCache.Clear();
             SolidTintIconCache.Clear();
@@ -68,23 +71,39 @@ namespace NoMorePain.Editor
             string path = AssetDatabase.GUIDToAssetPath(guid);
             if (string.IsNullOrEmpty(path) || !AssetDatabase.IsValidFolder(path)) return;
 
-            bool hasStoredColor = Colors.TryGetValue(guid, out var folderColor);
+            // Use canonical GUID resolved from path: left tree and right pane can provide
+            // different GUID strings for the same folder in some Unity layouts.
+            string canonicalGuid = AssetDatabase.AssetPathToGUID(path);
+            string styleGuid = !string.IsNullOrEmpty(canonicalGuid) ? canonicalGuid : guid;
+
+            bool hasStoredColor = TryGetFolderColor(styleGuid, guid, path, out var folderColor);
             int depth = GetFolderDepth(path);
-            bool isLeftTreePaneRow = IsProjectLeftTreeRow(selectionRect, depth);
-            bool canDrawRightPaneTint = hasStoredColor && NMPSettings.ProjectFolderColors && !isLeftTreePaneRow;
-            bool canDrawLeftPaneTint  = hasStoredColor && NMPSettings.ProjectRowColors && isLeftTreePaneRow;
-            bool canDrawFolderTint    = canDrawRightPaneTint || canDrawLeftPaneTint;
+            bool isGridTileRaw = IsGridTileRect(selectionRect);
+            bool isLeftTreePaneRow = IsProjectLeftTreeRow(selectionRect, depth, isGridTileRaw);
+            bool isGridTile = !isLeftTreePaneRow && isGridTileRaw;
+
+            // Row Colors:
+            // - apply on all row/list entries
+            // - exclude only clear grid tiles
+            bool canDrawRowTint = hasStoredColor
+                               && NMPSettings.ProjectRowColors
+                               && !isGridTile;
+
+            // Folder Colors:
+            // - icon tint in both panes is controlled only by Folder Colors
+            bool canDrawIconTint = hasStoredColor
+                                && NMPSettings.ProjectFolderColors;
 
             if (Event.current.type == EventType.Repaint)
             {
                 if (NMPSettings.ProjectZebra)
-                    DrawZebra(selectionRect, canDrawFolderTint);
-                if (canDrawFolderTint)
-                    DrawColorTint(guid, path, selectionRect);
+                    DrawZebra(selectionRect, canDrawRowTint, isLeftTreePaneRow);
+                if (canDrawRowTint || canDrawIconTint)
+                    DrawColorTint(folderColor, path, selectionRect, isLeftTreePaneRow, canDrawRowTint, canDrawIconTint);
                 if (NMPSettings.ProjectTreeLines)
                     DrawTreeLines(path, selectionRect, hasStoredColor, folderColor, isLeftTreePaneRow);
                 if (NMPSettings.ProjectBadgeIcons)
-                    DrawBadge(guid, path, selectionRect);
+                    DrawBadge(styleGuid, path, selectionRect, isLeftTreePaneRow);
             }
 
             // Alt + LMB on folder opens style picker (mirrors Hierarchy UX)
@@ -94,57 +113,91 @@ namespace NoMorePain.Editor
                 evt.alt &&
                 selectionRect.Contains(evt.mousePosition))
             {
-                ProjectFolderStylePickerWindow.Open(new[] { guid }, GUIUtility.GUIToScreenPoint(evt.mousePosition));
+                ProjectFolderStylePickerWindow.Open(new[] { styleGuid }, GUIUtility.GUIToScreenPoint(evt.mousePosition));
                 evt.Use();
             }
         }
 
-        private static void DrawColorTint(string guid, string folderPath, Rect rect)
+        private static void DrawColorTint(
+            Color color,
+            string folderPath,
+            Rect rect,
+            bool isLeftTreePaneRow,
+            bool drawRowTint,
+            bool drawIconTint)
         {
-            if (!Colors.TryGetValue(guid, out var color)) return;
-            bool isListLike = rect.width > rect.height * 1.8f;
+            bool isListLike = isLeftTreePaneRow || rect.width > rect.height * 1.8f;
 
-            // In list/tree mode, tint the full row like Hierarchy for quick scanning.
-            if (isListLike)
+            bool shouldDrawRowTint = drawRowTint;
+
+            // In left tree pane always tint row; in right Assets pane tint only in list mode.
+            if (shouldDrawRowTint)
             {
-                var rowFillRect = new Rect(0f, rect.y, rect.xMax, rect.height);
+                float rowStartX = isLeftTreePaneRow ? 0f : rect.x;
+                var rowFillRect = new Rect(rowStartX, rect.y, Mathf.Max(0f, rect.xMax - rowStartX), rect.height);
                 EditorGUI.DrawRect(rowFillRect, new Color(color.r, color.g, color.b, 0.30f));
-                EditorGUI.DrawRect(new Rect(0f, rect.y, 3f, rect.height), new Color(color.r, color.g, color.b, 1f));
+                EditorGUI.DrawRect(new Rect(rowStartX, rect.y, 3f, rect.height), new Color(color.r, color.g, color.b, 1f));
             }
 
-            Rect folderIconRect = GetFolderIconRect(rect);
-            var iconTex = AssetDatabase.GetCachedIcon(folderPath) as Texture2D;
-            if (iconTex == null) return;
-
-            // Draw a solid-color icon using source alpha as mask, so color is uniform
-            // across the full folder shape without "untinted" spots.
-            var solidTintIcon = GetOrBuildSolidTintIcon(iconTex, color);
-            if (solidTintIcon != null)
+            Rect folderIconRect = GetFolderIconRect(rect, isLeftTreePaneRow);
+            if (drawIconTint)
             {
-                // Slight inflate so the tint fully covers Unity's default folder border.
-                float pad = Mathf.Clamp(folderIconRect.width * 0.06f, 2.2f, 3.6f);
-                float bottomExtra = Mathf.Clamp(folderIconRect.height * 0.04f, 1.8f, 2.8f);
-                var drawRect = new Rect(
-                    folderIconRect.x - pad,
-                    folderIconRect.y - pad,
-                    folderIconRect.width + pad * 2f,
-                    folderIconRect.height + pad * 2f + bottomExtra);
-                var prevColor = GUI.color;
-                GUI.color = Color.white;
-                GUI.DrawTexture(drawRect, solidTintIcon, ScaleMode.ScaleToFit, true);
-                GUI.color = prevColor;
+                var iconTex = GetTintSourceIcon(folderPath);
+                if (iconTex != null)
+                {
+                    // Draw a solid-color icon using source alpha as mask, so color is uniform
+                    // across the full folder shape without "untinted" spots.
+                    var solidTintIcon = GetOrBuildSolidTintIcon(iconTex, color, useHardAlphaMask: isListLike);
+                    if (solidTintIcon != null)
+                    {
+                        // Slight inflate so the tint fully covers Unity's default folder border.
+                        float pad = Mathf.Clamp(folderIconRect.width * 0.08f, 2.8f, 4.2f);
+                        float bottomExtra = Mathf.Clamp(folderIconRect.height * 0.05f, 2.2f, 3.4f);
+                        var drawRect = new Rect(
+                            folderIconRect.x - pad,
+                            folderIconRect.y - pad,
+                            folderIconRect.width + pad * 2f + 0.5f,
+                            folderIconRect.height + pad * 2f + bottomExtra);
+                        var prevColor = GUI.color;
+                        GUI.color = Color.white;
+                        GUI.DrawTexture(drawRect, solidTintIcon, ScaleMode.ScaleToFit, true);
+                        GUI.color = prevColor;
+                    }
+                }
             }
 
-            if (isListLike)
-                DrawWhiteFolderLabel(folderPath, rect, folderIconRect);
+            if (shouldDrawRowTint)
+                DrawWhiteFolderLabel(folderPath, rect, folderIconRect, isLeftTreePaneRow, color);
         }
 
-        private static void DrawBadge(string guid, string folderPath, Rect rect)
+        private static Texture2D GetTintSourceIcon(string folderPath)
+        {
+            var fallback = _defaultFolderTintSourceIcon
+                ??= EditorGUIUtility.IconContent("Folder Icon").image as Texture2D;
+
+            var cached = AssetDatabase.GetCachedIcon(folderPath) as Texture2D;
+            if (cached == null) return fallback;
+
+            // Some package-style folders (for example "com.*") use non-folder icons
+            // with opaque backgrounds; tinting those produces a colored square.
+            // For such cases, use the standard folder silhouette as tint source.
+            string iconName = cached.name ?? string.Empty;
+            bool isFolderIcon = iconName.IndexOf("folder", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool packageLikeName = Path.GetFileName(folderPath).StartsWith("com.", StringComparison.OrdinalIgnoreCase);
+            bool packagePath = folderPath.StartsWith("Packages/", StringComparison.OrdinalIgnoreCase);
+
+            if (!isFolderIcon || packageLikeName || packagePath)
+                return fallback != null ? fallback : cached;
+
+            return cached;
+        }
+
+        private static void DrawBadge(string guid, string folderPath, Rect rect, bool isLeftTreePaneRow)
         {
             Texture2D badge = ResolveBadgeIcon(guid, folderPath);
             if (badge == null) return;
 
-            Rect folderIconRect = GetFolderIconRect(rect);
+            Rect folderIconRect = GetFolderIconRect(rect, isLeftTreePaneRow);
             // Scale with folder icon size (no upper cap, so slider changes are reflected).
             float badgeSize = Mathf.Max(8f, folderIconRect.width * 0.5f);
             var badgeRect = new Rect(
@@ -170,7 +223,6 @@ namespace NoMorePain.Editor
         private static void DrawTreeLines(string folderPath, Rect rowRect, bool hasCustomColor, Color folderColor, bool isLeftTreePaneRow)
         {
             if (Event.current.type != EventType.Repaint) return;
-            if (!IsListLikeRect(rowRect)) return;
             if (!isLeftTreePaneRow) return;
 
             int depth = GetFolderDepth(folderPath);
@@ -212,18 +264,21 @@ namespace NoMorePain.Editor
             }
         }
 
-        private static Rect GetFolderIconRect(Rect rect)
+        private static Rect GetFolderIconRect(Rect rect, bool isLeftTreePaneRow)
         {
             // Detect list-like layout by aspect ratio. This remains stable while
             // the Project-window icon size slider changes.
-            bool isListLike = IsListLikeRect(rect);
+            bool isListLike = isLeftTreePaneRow || IsListLikeRect(rect);
 
             if (isListLike)
             {
                 // Keep in sync with Unity's list icon size slider: no hard max cap.
                 float s = Mathf.Max(14f, rect.height - 2f);
+                // Right Assets pane needs a slightly larger X offset in list mode;
+                // otherwise the tinted icon appears shifted left versus Unity's folder icon.
+                float xOffset = isLeftTreePaneRow ? 1f : 2.5f;
                 return new Rect(
-                    rect.x + 1f,
+                    rect.x + xOffset,
                     rect.y + Mathf.Floor((rect.height - s) * 0.5f),
                     s,
                     s);
@@ -241,6 +296,8 @@ namespace NoMorePain.Editor
         }
 
         private static bool IsListLikeRect(Rect rect) => rect.width > rect.height * 1.8f;
+        // Grid tiles are roughly square. Rows/lists are much wider than they are tall.
+        private static bool IsGridTileRect(Rect rect) => rect.width <= rect.height * 1.6f;
 
         private static int GetFolderDepth(string folderPath)
         {
@@ -251,16 +308,23 @@ namespace NoMorePain.Editor
             return slashCount;
         }
 
-        private static bool IsProjectLeftTreeRow(Rect rowRect, int depth)
+        private static bool IsProjectLeftTreeRow(Rect rowRect, int depth, bool isGridTile)
         {
+            // Never classify right-grid tiles as left tree rows.
+            if (isGridTile) return false;
+            if (!IsListLikeRect(rowRect)) return false;
+
             // Match the left tree by how close X is to expected indentation.
             // This avoids classifying right Assets rows as left-tree rows.
-            if (depth <= 0) return false;
+            if (depth <= 0)
+                return rowRect.x <= 36f;
 
             float expectedTreeX = 6f + depth * 12.5f;
-            bool closeToTreeIndent = Mathf.Abs(rowRect.x - expectedTreeX) <= 18f;
-            bool plausibleTreeWidth = rowRect.width <= 420f;
-            return closeToTreeIndent && plausibleTreeWidth;
+            // Do NOT cap by row width: when user widens the left Project pane,
+            // width grows beyond previous thresholds and tree lines would disappear.
+            // X-indentation is the reliable discriminator here.
+            bool closeToTreeIndent = Mathf.Abs(rowRect.x - expectedTreeX) <= 20f;
+            return closeToTreeIndent;
         }
 
         private static List<string> BuildFolderChain(string folderPath)
@@ -320,17 +384,18 @@ namespace NoMorePain.Editor
                 EditorGUI.DrawRect(new Rect(lineX, midY + 1f, 2f, Mathf.Max(0f, rowRect.yMax - midY - 1f)), color);
         }
 
-        private static void DrawZebra(Rect rowRect, bool skipForColoredRow)
+        private static void DrawZebra(Rect rowRect, bool skipForColoredRow, bool isLeftTreePaneRow)
         {
             if (Event.current.type != EventType.Repaint) return;
-            if (!IsListLikeRect(rowRect)) return;
+            if (!(isLeftTreePaneRow || IsListLikeRect(rowRect))) return;
             if (skipForColoredRow) return;
             if (Mathf.RoundToInt(rowRect.y / rowRect.height) % 2 == 0) return;
 
             var zebraColor = EditorGUIUtility.isProSkin
                 ? new Color(1f, 1f, 1f, 0.07f)
                 : new Color(0f, 0f, 0f, 0.07f);
-            EditorGUI.DrawRect(new Rect(0f, rowRect.y, rowRect.xMax, rowRect.height), zebraColor);
+            float rowStartX = isLeftTreePaneRow ? 0f : rowRect.x;
+            EditorGUI.DrawRect(new Rect(rowStartX, rowRect.y, Mathf.Max(0f, rowRect.xMax - rowStartX), rowRect.height), zebraColor);
         }
 
         private static Texture2D ResolveBadgeIcon(string folderGuid, string folderPath)
@@ -410,11 +475,11 @@ namespace NoMorePain.Editor
             return result;
         }
 
-        private static Texture2D GetOrBuildSolidTintIcon(Texture2D source, Color color)
+        private static Texture2D GetOrBuildSolidTintIcon(Texture2D source, Color color, bool useHardAlphaMask)
         {
             if (source == null) return null;
 
-            string key = source.GetInstanceID() + ":" + ColorUtility.ToHtmlStringRGBA(color);
+            string key = source.GetInstanceID() + ":" + ColorUtility.ToHtmlStringRGBA(color) + ":" + (useHardAlphaMask ? "hard" : "soft");
             if (SolidTintIconCache.TryGetValue(key, out var cached) && cached != null)
                 return cached;
 
@@ -441,9 +506,18 @@ namespace NoMorePain.Editor
 
                 for (int i = 0; i < src.Length; i++)
                 {
-                    // Fill the whole folder silhouette with a solid color:
-                    // any non-zero source alpha becomes fully opaque.
-                    byte a = src[i].a > 0 ? (byte)255 : (byte)0;
+                    byte a;
+                    if (useHardAlphaMask)
+                    {
+                        // List/tree mode: prefer a solid fill but ignore very faint shadow pixels,
+                        // otherwise some icons become tinted rectangles.
+                        a = src[i].a >= 28 ? (byte)255 : (byte)0;
+                    }
+                    else
+                    {
+                        // Grid mode (large icons): preserve source alpha to avoid square artifacts.
+                        a = src[i].a;
+                    }
                     dst[i] = new Color32(r, g, b, a);
                 }
 
@@ -471,22 +545,34 @@ namespace NoMorePain.Editor
             }
         }
 
-        private static void DrawWhiteFolderLabel(string folderPath, Rect rowRect, Rect folderIconRect)
+        private static void DrawWhiteFolderLabel(
+            string folderPath,
+            Rect rowRect,
+            Rect folderIconRect,
+            bool isLeftTreePaneRow,
+            Color rowColor)
         {
             _coloredFolderLabelStyle ??= new GUIStyle(EditorStyles.label)
             {
                 clipping = TextClipping.Clip,
                 richText = false
             };
-            var white = new Color(1f, 1f, 1f, 0.98f);
+            var white = new Color(0.96f, 0.96f, 0.96f, 1f);
             _coloredFolderLabelStyle.normal.textColor  = white;
             _coloredFolderLabelStyle.hover.textColor   = white;
             _coloredFolderLabelStyle.active.textColor  = white;
             _coloredFolderLabelStyle.focused.textColor = white;
 
             string label = Path.GetFileName(folderPath);
-            float textX = folderIconRect.xMax + 2f;
+            float textX = folderIconRect.xMax + (isLeftTreePaneRow ? 3f : 2f);
             var textRect = new Rect(textX, rowRect.y, Mathf.Max(0f, rowRect.xMax - textX), rowRect.height);
+            // Replace the text zone with the same visual stack as the row (base + tint),
+            // then draw white text. This avoids "double text" without making the row opaque.
+            var baseBg = EditorGUIUtility.isProSkin
+                ? new Color(0.22f, 0.22f, 0.22f, 1f)
+                : new Color(0.76f, 0.76f, 0.76f, 1f);
+            EditorGUI.DrawRect(textRect, baseBg);
+            EditorGUI.DrawRect(textRect, new Color(rowColor.r, rowColor.g, rowColor.b, 0.30f));
             GUI.Label(textRect, label, _coloredFolderLabelStyle);
         }
 
@@ -530,6 +616,7 @@ namespace NoMorePain.Editor
         {
             foreach (var guid in folderGuids)
                 Colors[guid] = color;
+            RebuildPathColorCache();
             SaveData();
             EditorApplication.RepaintProjectWindow();
         }
@@ -538,6 +625,7 @@ namespace NoMorePain.Editor
         {
             foreach (var guid in folderGuids)
                 Colors.Remove(guid);
+            RebuildPathColorCache();
             SaveData();
             EditorApplication.RepaintProjectWindow();
         }
@@ -646,6 +734,7 @@ namespace NoMorePain.Editor
         private static void LoadData()
         {
             Colors.Clear();
+            ColorsByPath.Clear();
             CustomIconId.Clear();
             if (!File.Exists(DataPath)) return;
 
@@ -665,8 +754,43 @@ namespace NoMorePain.Editor
                     if (!string.IsNullOrEmpty(e.iconId))
                         CustomIconId[e.guid] = e.iconId;
                 }
+                RebuildPathColorCache();
             }
             catch (Exception e) { Debug.LogWarning($"[NoMorePain] Failed to load project folder styles: {e.Message}"); }
+        }
+
+        private static bool TryGetFolderColor(string styleGuid, string rawGuid, string path, out Color color)
+        {
+            if (!string.IsNullOrEmpty(path) && ColorsByPath.TryGetValue(path, out color))
+                return true;
+
+            if (!string.IsNullOrEmpty(styleGuid) && Colors.TryGetValue(styleGuid, out color))
+            {
+                if (!string.IsNullOrEmpty(path))
+                    ColorsByPath[path] = color;
+                return true;
+            }
+
+            if (!string.IsNullOrEmpty(rawGuid) && Colors.TryGetValue(rawGuid, out color))
+            {
+                if (!string.IsNullOrEmpty(path))
+                    ColorsByPath[path] = color;
+                return true;
+            }
+
+            color = default;
+            return false;
+        }
+
+        private static void RebuildPathColorCache()
+        {
+            ColorsByPath.Clear();
+            foreach (var kv in Colors)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(kv.Key);
+                if (string.IsNullOrEmpty(path) || !AssetDatabase.IsValidFolder(path)) continue;
+                ColorsByPath[path] = kv.Value;
+            }
         }
     }
 }

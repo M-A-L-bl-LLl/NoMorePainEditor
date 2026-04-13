@@ -239,7 +239,10 @@ namespace NoMorePain.Editor
             // ── Folder buttons (horizontally scrollable) ──────────────
             if (_folders.Count == 0) return;
 
-            var   style      = NMPStyles.ToolbarButton;
+            var   style      = new GUIStyle(NMPStyles.ToolbarButton)
+            {
+                alignment = TextAnchor.MiddleLeft
+            };
             var   folderIcon = EditorGUIUtility.IconContent("Folder Icon").image;
             const float contentLeftInset = 3f; // keep folder buttons clear of the left separator
             float areaWidth  = Mathf.Max(0f, loupeBtnRect.x - 4f - contentLeftInset);
@@ -254,50 +257,133 @@ namespace NoMorePain.Editor
                 _hierarchyWindow?.Repaint();
             }
 
+            int   folderCount     = Mathf.Max(1, _folders.Count);
+            float avgSlotW        = areaWidth / folderCount;
+            float minFolderBtnW   = 40f;
+            float maxFolderBtnW   = Mathf.Clamp(avgSlotW * 1.10f, 72f, 120f);
+            const float iconBlockW = 19f;
+            const float sidePadW   = 8f;
+            float maxTextW         = Mathf.Max(8f, maxFolderBtnW - iconBlockW - sidePadW);
+            const int minVisibleChars = 12;
+
+            var measureTextStyle = new GUIStyle(EditorStyles.miniLabel)
+            {
+                alignment     = TextAnchor.MiddleLeft,
+                clipping      = TextClipping.Clip,
+                imagePosition = ImagePosition.TextOnly,
+                wordWrap      = false,
+                richText      = false,
+                padding       = new RectOffset(0, 0, 0, 0),
+                margin        = new RectOffset(0, 0, 0, 0),
+                fontSize      = EditorStyles.miniButton.fontSize,
+                fontStyle     = EditorStyles.miniButton.fontStyle,
+            };
+
+            // Keep at least 12 visible characters (+ellipsis) before truncating harder.
+            float minBtnWForVisibleChars = iconBlockW
+                + measureTextStyle.CalcSize(new GUIContent(new string('W', minVisibleChars) + "\u2026")).x
+                + sidePadW;
+            maxFolderBtnW = Mathf.Max(maxFolderBtnW, minBtnWForVisibleChars);
+            maxTextW      = Mathf.Max(maxTextW, maxFolderBtnW - iconBlockW - sidePadW);
+
+            string FitLabel(string raw)
+            {
+                if (string.IsNullOrEmpty(raw)) return raw;
+                if (measureTextStyle.CalcSize(new GUIContent(raw)).x <= maxTextW) return raw;
+
+                const string ellipsis = "\u2026";
+                int minLen = Mathf.Min(minVisibleChars, raw.Length);
+                for (int len = raw.Length - 1; len >= minLen; len--)
+                {
+                    var candidate = raw.Substring(0, len) + ellipsis;
+                    if (measureTextStyle.CalcSize(new GUIContent(candidate)).x <= maxTextW)
+                        return candidate;
+                }
+                return raw.Length > minLen ? raw.Substring(0, minLen) + ellipsis : raw;
+            }
+
+            float CalcButtonWidth(string raw)
+            {
+                string label = FitLabel(raw);
+                float textW = measureTextStyle.CalcSize(new GUIContent(label)).x;
+                float rawW  = iconBlockW + textW + sidePadW;
+                return Mathf.Clamp(rawW, minFolderBtnW, maxFolderBtnW);
+            }
+
             // Compute total content width to clamp scroll
             float totalW = 2f;
             foreach (var (name, _, _) in _folders)
             {
-                var lbl = name.Length > 16 ? name.Substring(0, 15) + "\u2026" : name;
-                totalW += Mathf.Clamp(style.CalcSize(new GUIContent(" " + lbl, folderIcon)).x + 6f, 50f, 120f) + 2f;
+                totalW += CalcButtonWidth(name) + 2f;
             }
             _scrollOffsetX = Mathf.Clamp(_scrollOffsetX, 0f, Mathf.Max(0f, totalW - areaWidth));
 
             // Clip drawing to the buttons area
             GUI.BeginClip(areaRect);
-
-            float x = 2f - _scrollOffsetX;
-            foreach (var (name, go, globalId) in _folders)
+            try
             {
-                var label   = name.Length > 16 ? name.Substring(0, 15) + "\u2026" : name;
-                var content = new GUIContent(" " + label, folderIcon, name);
-                float btnW  = Mathf.Clamp(style.CalcSize(content).x + 6f, 50f, 120f);
+                var plainTextStyle = new GUIStyle(measureTextStyle);
+                var plainTextColor = EditorStyles.miniButton.normal.textColor;
+                plainTextStyle.normal.textColor = plainTextColor;
+                plainTextStyle.hover.textColor  = plainTextColor;
+                plainTextStyle.active.textColor = plainTextColor;
+                plainTextStyle.focused.textColor = plainTextColor;
 
-                var btnRect = new Rect(x, 2f, btnW, NavH - 4f);
+                var coloredTextStyle = new GUIStyle(measureTextStyle);
+                coloredTextStyle.normal.textColor = Color.white;
+                coloredTextStyle.hover.textColor  = Color.white;
+                coloredTextStyle.active.textColor = Color.white;
+                coloredTextStyle.focused.textColor = Color.white;
 
-                // Only draw if at least partially visible
-                if (x + btnW > 0f && x < areaWidth)
+                float x = 2f - _scrollOffsetX;
+                foreach (var (name, go, globalId) in _folders)
                 {
-                    bool hasColor = HierarchyColorManager.TryGetColor(globalId, out var folderColor);
+                    var label   = FitLabel(name);
+                    float btnW  = CalcButtonWidth(name);
 
-                    // 1. Button for interaction + default background shape
-                    bool clicked = GUI.Button(btnRect, hasColor ? GUIContent.none : content, style);
+                    var btnRect = new Rect(x, 2f, btnW, NavH - 4f);
 
-                    if (Event.current.type == EventType.Repaint && hasColor)
+                    // Only draw if at least partially visible
+                    if (x + btnW > 0f && x < areaWidth)
                     {
-                        // 2. Color rect on top of button background
-                        EditorGUI.DrawRect(btnRect, new Color(folderColor.r, folderColor.g, folderColor.b, 0.55f));
-                        // 3. Icon + label in white on top of color
-                        NMPStyles.ToolbarButtonLabel.Draw(btnRect, content, false, false, false, false);
+                        bool hasColor = HierarchyColorManager.TryGetColor(globalId, out var folderColor);
+
+                        // 1. Interaction + default background shape
+                        bool clicked = GUI.Button(btnRect, GUIContent.none, style);
+
+                        if (Event.current.type == EventType.Repaint && hasColor)
+                        {
+                            // 2. Color rect on top of button background
+                            EditorGUI.DrawRect(btnRect, new Color(folderColor.r, folderColor.g, folderColor.b, 0.55f));
+                        }
+
+                        if (Event.current.type == EventType.Repaint)
+                        {
+                            // 3. Draw icon with a fixed size so all folder buttons look consistent
+                            var iconRect = new Rect(btnRect.x + 4f, btnRect.y + Mathf.Floor((btnRect.height - 16f) * 0.5f), 16f, 16f);
+                            if (folderIcon != null)
+                                GUI.DrawTexture(iconRect, folderIcon, ScaleMode.ScaleToFit, true);
+
+                            // 4. Draw label
+                            float textX = iconRect.xMax + 2f;
+                            var textRect = new Rect(textX, btnRect.y, Mathf.Max(0f, btnRect.xMax - textX - 3f), btnRect.height);
+                            var labelContent = new GUIContent(label, name);
+                            if (hasColor)
+                                GUI.Label(textRect, labelContent, coloredTextStyle);
+                            else
+                                GUI.Label(textRect, labelContent, plainTextStyle);
+                        }
+
+                        if (clicked) ExpandAndFrame(go);
                     }
 
-                    if (clicked) ExpandAndFrame(go);
+                    x += btnW + 2f;
                 }
-
-                x += btnW + 2f;
             }
-
-            GUI.EndClip();
+            finally
+            {
+                GUI.EndClip();
+            }
         }
 
         // ── Folder cache ───────────────────────────────────────────────

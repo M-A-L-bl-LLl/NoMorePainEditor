@@ -153,7 +153,7 @@ namespace NoMorePain.Editor
                         imagePosition = ImagePosition.ImageLeft,
                         alignment     = TextAnchor.MiddleLeft,
                         padding       = new RectOffset(6, 8, 2, 2),
-                        fixedHeight   = 22
+                        fixedHeight   = 0
                     };
                 }
                 return _saveButton;

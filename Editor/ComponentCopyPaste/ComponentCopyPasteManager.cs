@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
@@ -25,8 +25,9 @@ namespace NoMorePain.Editor
         {
             bool showCopyPaste = NMPSettings.ComponentCopyPaste;
             bool showTabs      = NMPSettings.InspectorTabs;
+            bool showSave      = PlayModeSaveManager.CanShowInline(editor);
 
-            if (!showCopyPaste && !showTabs) return;
+            if (!showCopyPaste && !showTabs && !showSave) return;
             if (editor.target is not GameObject go) return;
 
             var baseColor = GUI.color;
@@ -34,18 +35,27 @@ namespace NoMorePain.Editor
             using (new EditorGUILayout.HorizontalScope())
             {
                 // < > nav buttons from InspectorTabsManager share this row
-                InspectorTabsManager.DrawInlineNavButtons();
+                if (showTabs)
+                    InspectorTabsManager.DrawInlineNavButtons();
 
                 GUILayout.FlexibleSpace();
 
-                // Add Tab / Remove — isolated on the left of Copy group
-                InspectorTabsManager.DrawInlinePinButton();
+                // Add Tab / Remove on the left side of action buttons
+                if (showTabs)
+                    InspectorTabsManager.DrawInlinePinButton();
+
+                // Save button from PlayModeSaveManager now lives in this shared row.
+                if (showSave)
+                {
+                    GUILayout.Space(8f);
+                    PlayModeSaveManager.DrawInlineSaveControls(go);
+                }
 
                 if (!showCopyPaste) return;
 
                 GUILayout.Space(8f);
 
-                // Copy button — icon drawn manually at larger size
+                // Copy button - icon drawn manually at larger size
                 if (GUILayout.Button(new GUIContent("    Copy", "Select components to copy to clipboard"),
                         NMPStyles.ToolbarButton, GUILayout.Width(72), GUILayout.Height(NMPStyles.TabHeight + 8f)))
                     PopupWindow.Show(GUILayoutUtility.GetLastRect(), new ComponentPickerPopup(go));
@@ -65,7 +75,7 @@ namespace NoMorePain.Editor
                     }
                 }
 
-                // Paste + Clear — visible when clipboard has data
+                // Paste + Clear - visible when clipboard has data
                 if (Clipboard.Count > 0)
                 {
                     if (GUILayout.Button(new GUIContent($"Paste ({Clipboard.Count})", BuildPasteTooltip()),
@@ -77,19 +87,18 @@ namespace NoMorePain.Editor
                     }
 
                     GUI.color = new Color(1f, 0.45f, 0.45f);
-                    if (GUILayout.Button(new GUIContent("✕", "Clear clipboard"),
+                    if (GUILayout.Button(new GUIContent("x", "Clear clipboard"),
                             NMPStyles.ToolbarButton, GUILayout.Width(26), GUILayout.Height(NMPStyles.TabHeight + 8f)))
                         Clipboard.Clear();
                     GUI.color = baseColor;
                 }
             }
         }
-
         private static string BuildPasteTooltip()
         {
             var sb = new System.Text.StringBuilder("Paste to selected GameObjects:\n");
             foreach (var entry in Clipboard)
-                sb.AppendLine($"  • {entry.displayName}");
+                sb.AppendLine($"  вЂў {entry.displayName}");
             sb.Append("\nHolds existing component: overwrites values.\nMissing component: adds new.");
             return sb.ToString();
         }
@@ -261,3 +270,4 @@ namespace NoMorePain.Editor
         }
     }
 }
+

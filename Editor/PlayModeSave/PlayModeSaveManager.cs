@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
@@ -34,7 +34,6 @@ namespace NoMorePain.Editor
 
         static PlayModeSaveManager()
         {
-            UnityEditor.Editor.finishedDefaultHeaderGUI += OnInspectorHeaderGUI;
             EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
         }
 
@@ -61,50 +60,52 @@ namespace NoMorePain.Editor
             SessionState.SetString(SessionKey, JsonUtility.ToJson(new SnapshotList { items = _snapshots }));
         }
 
-        private static void OnInspectorHeaderGUI(UnityEditor.Editor editor)
+        internal static bool CanShowInline(UnityEditor.Editor editor)
         {
+            if (!NMPSettings.PlayModeSave) return false;
+            if (!EditorApplication.isPlaying) return false;
+            if (editor.target is not GameObject go) return false;
+            return go.scene.IsValid(); // Skip project assets
+        }
+
+        internal static void DrawInlineSaveControls(GameObject go)
+        {
+            if (go == null) return;
             if (!NMPSettings.PlayModeSave) return;
             if (!EditorApplication.isPlaying) return;
-            if (editor.target is not GameObject go) return;
-            if (!go.scene.IsValid()) return; // Skip project assets
+            if (!go.scene.IsValid()) return;
 
             var globalId = GlobalObjectId.GetGlobalObjectIdSlow(go).ToString();
             int savedIndex = Snapshots.FindIndex(s => s.globalId == globalId);
             bool isSaved = savedIndex >= 0;
 
-            using (new EditorGUILayout.HorizontalScope())
+            var prevColor = GUI.color;
+            GUI.color = isSaved ? new Color(0.4f, 1f, 0.4f) : Color.white;
+
+            var iconName  = isSaved ? "GreenCheckmark" : "SaveActive";
+            var labelText = isSaved ? " Saved"         : " Save";
+            var tooltip   = isSaved
+                ? "Values captured - will apply on Play Mode exit.\nClick to re-capture."
+                : "Save component values.\nThey will be applied when exiting Play Mode.";
+
+            var icon    = EditorGUIUtility.IconContent(iconName).image;
+            var content = new GUIContent(labelText, icon, tooltip);
+
+            if (GUILayout.Button(content, NMPStyles.SaveButton, GUILayout.Height(NMPStyles.TabHeight + 8f)))
+                CaptureGameObject(go, globalId, savedIndex);
+
+            GUI.color = prevColor;
+
+            if (isSaved)
             {
-                GUILayout.FlexibleSpace();
-
-                var prevColor = GUI.color;
-                GUI.color = isSaved ? new Color(0.4f, 1f, 0.4f) : Color.white;
-
-                var iconName  = isSaved ? "GreenCheckmark" : "SaveActive";
-                var labelText = isSaved ? " Saved"         : " Save";
-                var tooltip   = isSaved
-                    ? "Values captured — will apply on Play Mode exit.\nClick to re-capture."
-                    : "Save component values.\nThey will be applied when exiting Play Mode.";
-
-                var icon    = EditorGUIUtility.IconContent(iconName).image;
-                var content = new GUIContent(labelText, icon, tooltip);
-
-                if (GUILayout.Button(content, NMPStyles.SaveButton, GUILayout.Height(22)))
-                    CaptureGameObject(go, globalId, savedIndex);
-
-                GUI.color = prevColor;
-
-                if (isSaved)
+                if (GUILayout.Button(new GUIContent("x", "Remove snapshot - won't apply on exit"),
+                        NMPStyles.ToolbarButton, GUILayout.Width(22), GUILayout.Height(NMPStyles.TabHeight + 8f)))
                 {
-                    if (GUILayout.Button(new GUIContent("✕", "Remove snapshot — won't apply on exit"),
-                            EditorStyles.miniButton, GUILayout.Width(22), GUILayout.Height(22)))
-                    {
-                        Snapshots.RemoveAt(savedIndex);
-                        SaveSnapshots();
-                    }
+                    Snapshots.RemoveAt(savedIndex);
+                    SaveSnapshots();
                 }
             }
         }
-
         private static void CaptureGameObject(GameObject go, string globalId, int existingIndex)
         {
             var snapshot = new ObjectSnapshot
@@ -199,3 +200,4 @@ namespace NoMorePain.Editor
         }
     }
 }
+
