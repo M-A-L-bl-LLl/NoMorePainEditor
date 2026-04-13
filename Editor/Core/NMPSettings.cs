@@ -1,4 +1,4 @@
-using UnityEditor;
+﻿using UnityEditor;
 
 namespace NoMorePain.Editor
 {
@@ -10,7 +10,7 @@ namespace NoMorePain.Editor
     {
         private const string Prefix = "NMP.";
 
-        // ── Hierarchy ─────────────────────────────────────────────────
+        // -- Hierarchy --
         public static bool HierarchyLeftIcon
         {
             get => Get("Hierarchy.LeftIcon",       true);
@@ -65,7 +65,38 @@ namespace NoMorePain.Editor
             set => Set("Hierarchy.FolderNavbar",   value);
         }
 
-        // ── Inspector ─────────────────────────────────────────────────
+        // -- Project -------------------------------------------------
+        public static bool ProjectFolderColors
+        {
+            get => Get("Project.FolderColors",     true);
+            set => Set("Project.FolderColors",     value);
+        }
+
+        public static bool ProjectRowColors
+        {
+            get => Get("Project.RowColors",        true);
+            set => Set("Project.RowColors",        value);
+        }
+
+        public static bool ProjectBadgeIcons
+        {
+            get => Get("Project.BadgeIcons",       true);
+            set => Set("Project.BadgeIcons",       value);
+        }
+
+        public static bool ProjectTreeLines
+        {
+            get => Get("Project.TreeLines",        true);
+            set => Set("Project.TreeLines",        value);
+        }
+
+        public static bool ProjectZebra
+        {
+            get => Get("Project.Zebra",            true);
+            set => Set("Project.Zebra",            value);
+        }
+
+        // -- Inspector --
         public static bool InspectorTabs
         {
             get => Get("Inspector.Tabs",           true);
@@ -84,7 +115,7 @@ namespace NoMorePain.Editor
             set => Set("Inspector.CopyPaste",      value);
         }
 
-        // ── Helpers ───────────────────────────────────────────────────
+        // -- Helpers --
         private static bool Get(string key, bool defaultValue) =>
             EditorPrefs.GetBool(Prefix + key, defaultValue);
 
@@ -92,3 +123,5 @@ namespace NoMorePain.Editor
             EditorPrefs.SetBool(Prefix + key, value);
     }
 }
+
+

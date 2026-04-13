@@ -1,4 +1,4 @@
-using UnityEditor;
+﻿using UnityEditor;
 using UnityEditorInternal;
 using UnityEngine;
 
@@ -6,13 +6,13 @@ namespace NoMorePain.Editor
 {
     internal sealed class NMPSettingsWindow : EditorWindow
     {
-        // ── Menu entry ────────────────────────────────────────────────
+        // -- Menu entry --
 
         [MenuItem("Tools/No More Pain/Settings", priority = 1)]
         public static void Open() =>
             GetWindow<NMPSettingsWindow>(utility: true, title: "No More Pain", focus: true);
 
-        // ── Styles (lazy) ─────────────────────────────────────────────
+        // -- Styles (lazy) --
 
         private GUIStyle _sectionLabel;
         private GUIStyle _featureLabel;
@@ -42,22 +42,22 @@ namespace NoMorePain.Editor
             _descLabel.normal.textColor = new Color(dc.r, dc.g, dc.b, 0.5f);
         }
 
-        // ── Lifecycle ─────────────────────────────────────────────────
+        // -- Lifecycle --
 
         private void OnEnable()
         {
-            minSize = new Vector2(340f, 380f);
+            minSize = new Vector2(340f, 460f);
             maxSize = new Vector2(600f, 600f);
         }
 
-        // ── GUI ───────────────────────────────────────────────────────
+        // -- GUI --
 
         private void OnGUI()
         {
             EnsureStyles();
             EditorGUILayout.Space(8f);
 
-            // ── Hierarchy ─────────────────────────────────────────────
+            // -- Hierarchy --
             DrawSectionHeader("HIERARCHY");
 
             EditorGUI.BeginChangeCheck();
@@ -68,7 +68,6 @@ namespace NoMorePain.Editor
             NMPSettings.HierarchyTreeLines      = Toggle(NMPSettings.HierarchyTreeLines,      "Tree Lines",            "Parent-child connection lines");
             NMPSettings.HierarchyActiveToggle   = Toggle(NMPSettings.HierarchyActiveToggle,   "Active Toggle",         "Enable/disable checkbox on hover");
             NMPSettings.HierarchyColors         = Toggle(NMPSettings.HierarchyColors,         "Row Colors",            "Color-highlight rows (Alt+Click to pick color)");
-            NMPSettings.HierarchyFolders        = Toggle(NMPSettings.HierarchyFolders,        "Folders",               "Mark GameObjects as visual folders");
             NMPSettings.HierarchyFolderNavbar   = Toggle(NMPSettings.HierarchyFolderNavbar,   "Folder Navbar",         "Quick-jump buttons for folders in the hierarchy search bar");
             if (EditorGUI.EndChangeCheck())
             {
@@ -78,7 +77,21 @@ namespace NoMorePain.Editor
 
             EditorGUILayout.Space(10f);
 
-            // ── Inspector ─────────────────────────────────────────────
+            // Project
+            DrawSectionHeader("PROJECT");
+
+            EditorGUI.BeginChangeCheck();
+            NMPSettings.ProjectFolderColors  = Toggle(NMPSettings.ProjectFolderColors,  "Folder Colors",  "Color folder icons and rows in the right Assets pane");
+            NMPSettings.ProjectRowColors     = Toggle(NMPSettings.ProjectRowColors,     "Row Colors",     "Color rows and tree lines in the left Project pane");
+            NMPSettings.ProjectBadgeIcons    = Toggle(NMPSettings.ProjectBadgeIcons,    "Badge Icons",    "Show folder badge icons in the bottom-right corner");
+            NMPSettings.ProjectTreeLines     = Toggle(NMPSettings.ProjectTreeLines,     "Tree Lines",     "Parent-child connection lines in the folder tree");
+            NMPSettings.ProjectZebra         = Toggle(NMPSettings.ProjectZebra,         "Zebra Striping", "Alternating row tint for non-colored folders");
+            if (EditorGUI.EndChangeCheck())
+                EditorApplication.RepaintProjectWindow();
+
+            EditorGUILayout.Space(10f);
+
+            // -- Inspector --
             DrawSectionHeader("INSPECTOR");
 
             EditorGUI.BeginChangeCheck();
@@ -91,7 +104,7 @@ namespace NoMorePain.Editor
             EditorGUILayout.Space(8f);
         }
 
-        // ── Drawing helpers ───────────────────────────────────────────
+        // -- Drawing helpers --
 
         private void DrawSectionHeader(string title)
         {
@@ -131,9 +144,7 @@ namespace NoMorePain.Editor
 
         private static void RepaintAllInspectors() => InternalEditorUtility.RepaintAllViews();
 
-        // ══════════════════════════════════════════════════════════════
-        //  Modern pill-shaped toggle switch
-        // ══════════════════════════════════════════════════════════════
+        // -- Modern pill-shaped toggle switch --
 
         private static class SwitchControl
         {
@@ -141,7 +152,7 @@ namespace NoMorePain.Editor
             private const float KnobPad     = 2f;   // gap between knob and track edge
             private const int   TexW        = 34;
             private const int   TexH        = 18;
-            private const int   TexRadius   = 9;    // half of TexH → full pill
+            private const int   TexRadius   = 9;    // half of TexH -> full pill
 
             private static Texture2D _trackOn;
             private static Texture2D _trackOff;
@@ -200,7 +211,7 @@ namespace NoMorePain.Editor
                     ScaleMode.StretchToFill, alphaBlend: true);
             }
 
-            // ── Texture generation ───────────────────────────────────
+            // -- Texture generation --
 
             private static Texture2D MakePill(int w, int h, int radius, Color color)
             {
@@ -266,3 +277,5 @@ namespace NoMorePain.Editor
         }
     }
 }
+
+
