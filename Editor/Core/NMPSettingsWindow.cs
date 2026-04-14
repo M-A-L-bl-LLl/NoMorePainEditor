@@ -69,6 +69,7 @@ namespace NoMorePain.Editor
             NMPSettings.HierarchyActiveToggle   = Toggle(NMPSettings.HierarchyActiveToggle,   "Active Toggle",         "Enable/disable checkbox on hover");
             NMPSettings.HierarchyColors         = Toggle(NMPSettings.HierarchyColors,         "Row Colors",            "Color-highlight rows (Alt+Click to pick color)");
             NMPSettings.HierarchyFolderNavbar   = Toggle(NMPSettings.HierarchyFolderNavbar,   "Folder Navbar",         "Quick-jump buttons for folders in the hierarchy search bar");
+            NMPSettings.HierarchyHoverPreview   = Toggle(NMPSettings.HierarchyHoverPreview,   "Hover Preview",        "Alt+hover mesh preview popup in Hierarchy");
             if (EditorGUI.EndChangeCheck())
             {
                 HierarchyIconsManager.InvalidateCache();

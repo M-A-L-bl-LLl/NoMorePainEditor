@@ -48,6 +48,8 @@ namespace NoMorePain.Editor
         private static Dictionary<string, Type> _typeByName;
         private static GUIStyle _coloredFolderLabelStyle;
         private const float TreeIndentWidth = 14f;
+        private static float _leftTreeRightXEstimate = 220f;
+        private static bool _hasLeftTreeRightXEstimate;
 
         static ProjectFolderStyleManager()
         {
@@ -63,6 +65,8 @@ namespace NoMorePain.Editor
             ResolveIconCache.Clear();
             SolidTintIconCache.Clear();
             SubFoldersCache.Clear();
+            _hasLeftTreeRightXEstimate = false;
+            _leftTreeRightXEstimate = 220f;
             EditorApplication.RepaintProjectWindow();
         }
 
@@ -79,6 +83,7 @@ namespace NoMorePain.Editor
             bool hasStoredColor = TryGetFolderColor(styleGuid, guid, path, out var folderColor);
             int depth = GetFolderDepth(path);
             bool isGridTileRaw = IsGridTileRect(selectionRect);
+            UpdateLeftTreeRightXEstimate(selectionRect, depth, isGridTileRaw);
             bool isLeftTreePaneRow = IsProjectLeftTreeRow(selectionRect, depth, isGridTileRaw);
             bool isGridTile = !isLeftTreePaneRow && isGridTileRaw;
 
@@ -134,7 +139,10 @@ namespace NoMorePain.Editor
             if (shouldDrawRowTint)
             {
                 float rowStartX = isLeftTreePaneRow ? 0f : rect.x;
-                var rowFillRect = new Rect(rowStartX, rect.y, Mathf.Max(0f, rect.xMax - rowStartX), rect.height);
+                float rowRightX = isLeftTreePaneRow && _hasLeftTreeRightXEstimate
+                    ? Mathf.Min(rect.xMax, _leftTreeRightXEstimate)
+                    : rect.xMax;
+                var rowFillRect = new Rect(rowStartX, rect.y, Mathf.Max(0f, rowRightX - rowStartX), rect.height);
                 EditorGUI.DrawRect(rowFillRect, new Color(color.r, color.g, color.b, 0.30f));
                 EditorGUI.DrawRect(new Rect(rowStartX, rect.y, 3f, rect.height), new Color(color.r, color.g, color.b, 1f));
             }
@@ -274,11 +282,16 @@ namespace NoMorePain.Editor
             {
                 // Keep in sync with Unity's list icon size slider: no hard max cap.
                 float s = Mathf.Max(14f, rect.height - 2f);
+                float availableW = Mathf.Max(8f, rect.xMax - rect.x - 2f);
+                s = Mathf.Min(s, availableW);
                 // Right Assets pane needs a slightly larger X offset in list mode;
                 // otherwise the tinted icon appears shifted left versus Unity's folder icon.
                 float xOffset = isLeftTreePaneRow ? 1f : 2.5f;
+                float x = rect.x + xOffset;
+                float maxX = rect.xMax - s - 1f;
+                if (x > maxX) x = maxX;
                 return new Rect(
-                    rect.x + xOffset,
+                    x,
                     rect.y + Mathf.Floor((rect.height - s) * 0.5f),
                     s,
                     s);
@@ -317,14 +330,34 @@ namespace NoMorePain.Editor
             // Match the left tree by how close X is to expected indentation.
             // This avoids classifying right Assets rows as left-tree rows.
             if (depth <= 0)
-                return rowRect.x <= 36f;
+                return rowRect.x <= 48f;
 
             float expectedTreeX = 6f + depth * 12.5f;
-            // Do NOT cap by row width: when user widens the left Project pane,
-            // width grows beyond previous thresholds and tree lines would disappear.
-            // X-indentation is the reliable discriminator here.
             bool closeToTreeIndent = Mathf.Abs(rowRect.x - expectedTreeX) <= 20f;
             return closeToTreeIndent;
+        }
+
+        private static void UpdateLeftTreeRightXEstimate(Rect rowRect, int depth, bool isGridTile)
+        {
+            if (isGridTile) return;
+            if (!IsListLikeRect(rowRect)) return;
+
+            bool candidate;
+            if (depth <= 0)
+            {
+                // Root tree rows (Assets / Packages) are left-pane only and let us
+                // refresh boundary immediately on splitter resize, even when collapsed.
+                candidate = rowRect.x <= 48f;
+            }
+            else
+            {
+                float expectedTreeX = 6f + depth * 12.5f;
+                candidate = Mathf.Abs(rowRect.x - expectedTreeX) <= 20f;
+            }
+
+            if (!candidate) return;
+            _leftTreeRightXEstimate = rowRect.xMax;
+            _hasLeftTreeRightXEstimate = true;
         }
 
         private static List<string> BuildFolderChain(string folderPath)
@@ -387,7 +420,7 @@ namespace NoMorePain.Editor
         private static void DrawZebra(Rect rowRect, bool skipForColoredRow, bool isLeftTreePaneRow)
         {
             if (Event.current.type != EventType.Repaint) return;
-            if (!(isLeftTreePaneRow || IsListLikeRect(rowRect))) return;
+            if (!isLeftTreePaneRow) return;
             if (skipForColoredRow) return;
             if (Mathf.RoundToInt(rowRect.y / rowRect.height) % 2 == 0) return;
 
@@ -395,7 +428,10 @@ namespace NoMorePain.Editor
                 ? new Color(1f, 1f, 1f, 0.07f)
                 : new Color(0f, 0f, 0f, 0.07f);
             float rowStartX = isLeftTreePaneRow ? 0f : rowRect.x;
-            EditorGUI.DrawRect(new Rect(rowStartX, rowRect.y, Mathf.Max(0f, rowRect.xMax - rowStartX), rowRect.height), zebraColor);
+            float rowRightX = isLeftTreePaneRow && _hasLeftTreeRightXEstimate
+                ? Mathf.Min(rowRect.xMax, _leftTreeRightXEstimate)
+                : rowRect.xMax;
+            EditorGUI.DrawRect(new Rect(rowStartX, rowRect.y, Mathf.Max(0f, rowRightX - rowStartX), rowRect.height), zebraColor);
         }
 
         private static Texture2D ResolveBadgeIcon(string folderGuid, string folderPath)
@@ -565,7 +601,10 @@ namespace NoMorePain.Editor
 
             string label = Path.GetFileName(folderPath);
             float textX = folderIconRect.xMax + (isLeftTreePaneRow ? 3f : 2f);
-            var textRect = new Rect(textX, rowRect.y, Mathf.Max(0f, rowRect.xMax - textX), rowRect.height);
+            float rowRightX = isLeftTreePaneRow && _hasLeftTreeRightXEstimate
+                ? Mathf.Min(rowRect.xMax, _leftTreeRightXEstimate)
+                : rowRect.xMax;
+            var textRect = new Rect(textX, rowRect.y, Mathf.Max(0f, rowRightX - textX), rowRect.height);
             // Replace the text zone with the same visual stack as the row (base + tint),
             // then draw white text. This avoids "double text" without making the row opaque.
             var baseBg = EditorGUIUtility.isProSkin

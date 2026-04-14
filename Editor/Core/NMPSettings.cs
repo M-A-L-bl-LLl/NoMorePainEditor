@@ -65,6 +65,12 @@ namespace NoMorePain.Editor
             set => Set("Hierarchy.FolderNavbar",   value);
         }
 
+        public static bool HierarchyHoverPreview
+        {
+            get => Get("Hierarchy.HoverPreview",   true);
+            set => Set("Hierarchy.HoverPreview",   value);
+        }
+
         // -- Project -------------------------------------------------
         public static bool ProjectFolderColors
         {

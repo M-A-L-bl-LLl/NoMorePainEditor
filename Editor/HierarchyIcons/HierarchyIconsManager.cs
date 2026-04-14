@@ -83,6 +83,8 @@ namespace NoMorePain.Editor
             if (NMPSettings.HierarchyTreeLines)   TreeLines.Draw(go.transform, rowRect);
                                                   HandleColorPickerClick(go, rowRect);
             if (NMPSettings.HierarchyActiveToggle) DrawActiveToggle(go, rowRect);
+            if (NMPSettings.HierarchyHoverPreview) HierarchyHoverPreviewWindow.HandleHierarchyRow(go, rowRect);
+            else                                   HierarchyHoverPreviewWindow.HideIfShown();
 
             if (HierarchyFolderManager.IsFolder(globalId))
             {
