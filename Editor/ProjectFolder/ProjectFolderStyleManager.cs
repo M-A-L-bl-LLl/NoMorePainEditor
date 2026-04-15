@@ -111,11 +111,14 @@ namespace NoMorePain.Editor
                     DrawBadge(styleGuid, path, selectionRect, isLeftTreePaneRow);
             }
 
-            // Alt + LMB on folder opens style picker (mirrors Hierarchy UX)
+            // Alt + LMB on folder opens style picker (mirrors Hierarchy UX).
+            // Use MouseUp (not MouseDown) so it does not interfere with drag-and-drop,
+            // especially when Alt is held to show Favorites overlay.
             var evt = Event.current;
-            if (evt.type == EventType.MouseDown &&
+            if (evt.type == EventType.MouseUp &&
                 evt.button == 0 &&
                 evt.alt &&
+                DragAndDrop.objectReferences.Length == 0 &&
                 selectionRect.Contains(evt.mousePosition))
             {
                 ProjectFolderStylePickerWindow.Open(new[] { styleGuid }, GUIUtility.GUIToScreenPoint(evt.mousePosition));
@@ -689,6 +692,40 @@ namespace NoMorePain.Editor
             ResolveIconCache.Clear();
             SaveData();
             EditorApplication.RepaintProjectWindow();
+        }
+
+        internal static bool TryGetColorForFolderPath(string folderPath, out Color color)
+        {
+            color = default;
+            if (string.IsNullOrEmpty(folderPath) || !AssetDatabase.IsValidFolder(folderPath))
+                return false;
+
+            string canonicalGuid = AssetDatabase.AssetPathToGUID(folderPath);
+            return TryGetFolderColor(canonicalGuid, canonicalGuid, folderPath, out color);
+        }
+
+        internal static Texture2D GetTintedFolderIconForPath(string folderPath, Color color, bool useHardAlphaMask)
+        {
+            if (string.IsNullOrEmpty(folderPath) || !AssetDatabase.IsValidFolder(folderPath))
+                return null;
+
+            var iconTex = GetTintSourceIcon(folderPath);
+            if (iconTex == null)
+                return null;
+
+            return GetOrBuildSolidTintIcon(iconTex, color, useHardAlphaMask);
+        }
+
+        internal static Texture2D GetBadgeIconForFolderPath(string folderPath)
+        {
+            if (string.IsNullOrEmpty(folderPath) || !AssetDatabase.IsValidFolder(folderPath))
+                return null;
+
+            string canonicalGuid = AssetDatabase.AssetPathToGUID(folderPath);
+            if (string.IsNullOrEmpty(canonicalGuid))
+                return null;
+
+            return ResolveBadgeIcon(canonicalGuid, folderPath);
         }
 
         private static List<string> GetSelectedFolderGuids()

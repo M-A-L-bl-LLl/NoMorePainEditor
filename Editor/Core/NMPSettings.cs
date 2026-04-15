@@ -1,4 +1,4 @@
-﻿using UnityEditor;
+using UnityEditor;
 
 namespace NoMorePain.Editor
 {
@@ -100,6 +100,12 @@ namespace NoMorePain.Editor
         {
             get => Get("Project.Zebra",            true);
             set => Set("Project.Zebra",            value);
+        }
+
+        public static bool ProjectFavoritesOverlay
+        {
+            get => Get("Project.FavoritesOverlay", true);
+            set => Set("Project.FavoritesOverlay", value);
         }
 
         // -- Inspector --

@@ -1,4 +1,4 @@
-﻿using UnityEditor;
+using UnityEditor;
 using UnityEditorInternal;
 using UnityEngine;
 
@@ -87,6 +87,7 @@ namespace NoMorePain.Editor
             NMPSettings.ProjectBadgeIcons    = Toggle(NMPSettings.ProjectBadgeIcons,    "Badge Icons",    "Show folder badge icons in the bottom-right corner");
             NMPSettings.ProjectTreeLines     = Toggle(NMPSettings.ProjectTreeLines,     "Tree Lines",     "Parent-child connection lines in the folder tree");
             NMPSettings.ProjectZebra         = Toggle(NMPSettings.ProjectZebra,         "Zebra Striping", "Alternating row tint for non-colored folders");
+            NMPSettings.ProjectFavoritesOverlay = Toggle(NMPSettings.ProjectFavoritesOverlay, "Favorites Overlay", "Hold Alt in Project to show quick favorites panel");
             if (EditorGUI.EndChangeCheck())
                 EditorApplication.RepaintProjectWindow();
 
