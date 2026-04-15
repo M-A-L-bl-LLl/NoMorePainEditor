@@ -11,6 +11,7 @@
 
 - 🎯 Быстрая навигация по папкам в Hierarchy (Folder Navbar)
 - 🎨 Цветные папки и строки в Project (Folder Colors / Row Colors)
+- ⭐ Панель избранного в Project по зажатому `Alt` (Favorites Overlay)
 - 👀 Hover Preview по `Alt` для объектов с мешем
 - 📌 Удобный Inspector workflow: Tabs, Copy/Paste, Save в Play Mode
 
@@ -70,6 +71,32 @@
 - **Alt + ЛКМ** по папке в окне Project
 
 Данные сохраняются в `ProjectSettings/NoMorePainProjectFolderStyles.json`.
+
+#### ⭐ Project — Favorites Overlay
+Панель избранного поверх левой панели Project: зажми **Alt** в окне Project — панель появляется мгновенно.
+
+**Как добавить элементы:**
+- Перетащи папку, ассет или объект прямо на панель (Drag & Drop)
+- **ПКМ → Add to Favorites** в контекстном меню Project
+
+**Что можно делать с элементами:**
+- Клик по строке — выделяет и пингует объект в Project
+- Кнопка **✕** на строке — удалить из избранного
+- **ПКМ** по строке — Ping или Remove from Favorites
+- Перетащить строку — изменить порядок
+
+**Страницы:**
+- Несколько страниц избранного; переключение кнопками **< >** в нижней части панели
+- Двойной клик по названию страницы — переименовать
+- Можно переносить элементы на другую страницу перетаскиванием на кнопку пагинатора
+
+**Высота строк:**
+- Слайдер в подвале панели — меняет размер строк от компактного до крупного (иконки 16–44 px)
+
+**Интеграция с Folder Style:**
+- Если папка покрашена через No More Pain — её цвет отражается в панели: цветная полоска и подсветка строки
+
+Данные сохраняются в `ProjectSettings/NoMorePainProjectFavorites.json`.
 
 #### 📌 Табы инспектора
 Полоса закреплённых объектов в верхней части Inspector. Табы хранятся отдельно для каждой сцены.  
@@ -144,6 +171,7 @@ https://github.com/M-A-L-bl-LLl/NoMorePainEditor.git
 
 - 🎯 Fast folder navigation in Hierarchy (Folder Navbar)
 - 🎨 Colored folders and rows in Project (Folder Colors / Row Colors)
+- ⭐ Project Favorites panel on `Alt` hold (Favorites Overlay)
 - 👀 `Alt` hover preview for mesh objects
 - 📌 Smooth Inspector workflow: Tabs, Copy/Paste, Save in Play Mode
 
@@ -203,6 +231,32 @@ Configure folder style via:
 - **Alt + LMB** on a folder in Project window
 
 Data is saved to `ProjectSettings/NoMorePainProjectFolderStyles.json`.
+
+#### ⭐ Project — Favorites Overlay
+A favorites panel over the left pane of the Project window: hold **Alt** — the panel appears instantly.
+
+**Adding items:**
+- Drag folders, assets, or objects directly onto the panel
+- **Right-click → Add to Favorites** in the Project context menu
+
+**Working with items:**
+- Click a row — selects and pings the object in Project
+- **✕** button on a row — remove from favorites
+- **Right-click** a row — Ping or Remove from Favorites
+- Drag a row to reorder
+
+**Pages:**
+- Multiple favorites pages; switch with **< >** buttons at the bottom
+- Double-click a page name to rename it
+- Drag items onto pager arrows to move them to another page
+
+**Row height:**
+- Slider in the panel footer — scales row height from compact to large (icons 16–44 px)
+
+**Folder Style integration:**
+- Folders colored via No More Pain reflect their color in the panel: color stripe and row tint
+
+Data is saved to `ProjectSettings/NoMorePainProjectFavorites.json`.
 
 #### 📌 Inspector Tabs
 Pinned objects strip at the top of Inspector. Tabs are stored per scene.  
