@@ -602,7 +602,7 @@ namespace NoMorePain.Editor
                         }
 
                         if (!(_isRowReorderDrag && itemIndex == _dragSourceIndex))
-                            DrawRowVisual(item, rowRect, localMouse);
+                            DrawRowVisual(item, rowRect, localMouse, pageSlot);
                         rowIndex++;
                     }
                     GUI.EndGroup();
@@ -846,7 +846,7 @@ namespace NoMorePain.Editor
             }
         }
 
-        private static void DrawRowVisual(FavoriteItem item, Rect rowRect, Vector2 mousePosition)
+        private static void DrawRowVisual(FavoriteItem item, Rect rowRect, Vector2 mousePosition, int zebraIndex = -1)
         {
             bool isHover = rowRect.Contains(mousePosition);
             bool isSelected = IsItemSelected(item);
@@ -856,6 +856,23 @@ namespace NoMorePain.Editor
             bool hasFolderColor = isFolder && ProjectFolderStyleManager.TryGetColorForFolderPath(itemPath, out folderColor);
             bool drawRowTint = hasFolderColor && NMPSettings.ProjectRowColors;
             bool drawIconTint = hasFolderColor && NMPSettings.ProjectFolderColors;
+            bool drawZebra = NMPSettings.ProjectZebra && !drawRowTint;
+            if (drawZebra)
+            {
+                bool isOdd;
+                if (zebraIndex >= 0)
+                    isOdd = (zebraIndex & 1) != 0;
+                else
+                    isOdd = Mathf.RoundToInt(rowRect.y / Mathf.Max(1f, rowRect.height)) % 2 != 0;
+
+                if (isOdd)
+                {
+                    var zebraColor = EditorGUIUtility.isProSkin
+                        ? new Color(1f, 1f, 1f, 0.07f)
+                        : new Color(0f, 0f, 0f, 0.07f);
+                    EditorGUI.DrawRect(rowRect, zebraColor);
+                }
+            }
 
             if (drawRowTint)
             {
