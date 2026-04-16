@@ -47,10 +47,39 @@ jobs:
           git tag -a "${{ steps.version.outputs.tag }}" -m "${{ steps.version.outputs.tag }}"
           git push origin "${{ steps.version.outputs.tag }}"
 
+      - name: Build release notes
+        if: steps.tag_check.outputs.exists == 'false'
+        id: notes
+        shell: bash
+        run: |
+          CURRENT_TAG="${{ steps.version.outputs.tag }}"
+          PREV_TAG="$(git tag --list 'v*' --sort=-v:refname | grep -Fxv "${CURRENT_TAG}" | head -n1 || true)"
+
+          {
+            echo "## What's Changed"
+            echo
+            if [ -n "${PREV_TAG}" ]; then
+              git log --no-merges --pretty=format:'- %s (%h)' "${PREV_TAG}..HEAD"
+            else
+              git log --no-merges --pretty=format:'- %s (%h)' -n 50
+            fi
+            echo
+            echo
+            if [ -n "${PREV_TAG}" ]; then
+              echo "## Full Diff"
+              echo
+              echo "[${PREV_TAG}...${CURRENT_TAG}](https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${CURRENT_TAG})"
+            fi
+          } > RELEASE_NOTES.md
+
+          echo "body<<EOF" >> "$GITHUB_OUTPUT"
+          cat RELEASE_NOTES.md >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         if: steps.tag_check.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
-          generate_release_notes: true
+          body: ${{ steps.notes.outputs.body }}
