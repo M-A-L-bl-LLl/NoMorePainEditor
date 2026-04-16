@@ -63,6 +63,9 @@ namespace NoMorePain.Editor
         private static readonly List<int> FavoritePages = new();
         private static readonly Dictionary<string, Texture2D> IconCache = new(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<int, string> PageNames = new();
+        private static readonly Dictionary<int, float> PageScrollStarts = new();
+        private static readonly Dictionary<int, float> PageScrollVisualStarts = new();
+        private static readonly Dictionary<int, float> PageScrollVelocities = new();
         private static readonly BindingFlags ProjectBrowserBindingFlags =
             BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
 
@@ -75,12 +78,15 @@ namespace NoMorePain.Editor
         private static int _rowScaledFontSize = -1;
         private static GUIStyle _hintStyle;
         private static GUIStyle _pageStyle;
+        private static GUIStyle _pageHoverStyle;
         private static GUIStyle _pageEditStyle;
         private static GUIStyle _pageArrowStyle;
+        private static GUIStyle _pageArrowHoverStyle;
         private static GUIStyle _pageArrowDisabledStyle;
         private static Texture2D _pagerPillTexture;
         private static bool _pagerPillTextureForPro;
         private static FieldInfo _projectBrowserTreeViewRectField;
+        private static MethodInfo _projectBrowserFrameObjectMethod;
 
         private static float _leftTreeRightXEstimate = 220f;
         private static bool _hasLeftTreeRightXEstimate;
@@ -92,6 +98,8 @@ namespace NoMorePain.Editor
         private static int _leftMetricsFrame = -1;
         private static Rect _leftTreeFrameRectEstimate;
         private static bool _hasLeftTreeFrameRectEstimate;
+        private static string _rightPanePingGuid;
+        private static double _rightPanePingUntil;
 
         private static bool _wasAltPressed;
         private static int _page;
@@ -113,6 +121,10 @@ namespace NoMorePain.Editor
         private static int _currentPageCount = 1;
         private static Rect _pagerPrevRect;
         private static Rect _pagerNextRect;
+        private static bool _isScrollbarDrag;
+        private static int _scrollbarDragPage = -1;
+        private static float _scrollbarDragGrabOffsetY;
+        private static double _lastScrollAnimationTime = -1d;
 
         private const float PanelMinWidth = 120f;
         private const float HeaderHeight = 24f;
@@ -120,6 +132,14 @@ namespace NoMorePain.Editor
         private const float MaxRowHeight = 72f;
         private const float FooterHeight = 32f;
         private const float RowHeightSliderWidth = 74f;
+        private const float FavoritesScrollbarWidth = 6f;
+        private const float FavoritesScrollbarGap = 3f;
+        private const float ScrollVisualSmooth = 18f;
+        private const float ScrollDragSmooth = 26f;
+        private const float ScrollInertiaDamping = 24f;
+        private const float ScrollMinVelocity = 0.05f;
+        private const float ReorderAutoScrollRowsPerSecondMin = 0.95f;
+        private const float ReorderAutoScrollRowsPerSecondMax = 4.2f;
         private const string RowHeightSliderPrefKey = "NoMorePain.ProjectFavoritesOverlay.RowHeightSlider";
         private const float ReorderDragStartDistance = 4f;
         private const string PageNameFieldControlName = "NMP_Favorites_PageName";
@@ -150,6 +170,10 @@ namespace NoMorePain.Editor
             _leftTreeFrameRectEstimate = default;
             _hasLeftTreeFrameRectEstimate = false;
             _cachedLeftPaneHost = null;
+            PageScrollStarts.Clear();
+            PageScrollVisualStarts.Clear();
+            PageScrollVelocities.Clear();
+            _lastScrollAnimationTime = -1d;
             EditorApplication.RepaintProjectWindow();
         }
 
@@ -166,6 +190,7 @@ namespace NoMorePain.Editor
             bool isLeftTreePaneRow = IsProjectLeftTreeRow(selectionRect, depth, isGridTile);
             UpdateLeftTreeWidthFromRootRow(path, selectionRect, isGridTile);
             UpdateLeftTreeMetrics(selectionRect, isLeftTreePaneRow);
+            DrawRightPanePingHighlight(guid, selectionRect, isLeftTreePaneRow, evt);
 
             if (NMPSettings.ProjectFavoritesOverlay)
             {
@@ -317,8 +342,24 @@ namespace NoMorePain.Editor
                 EditorGUI.DrawRect(panelRect, bgColor);
             }
 
-            var titleRect = new Rect(panelRect.x + 8f, panelRect.y + 2f, panelRect.width - 16f, HeaderHeight - 2f);
+            bool showHeaderSlider = panelRect.width >= 176f;
+            float headerSliderSpacing = showHeaderSlider ? 8f : 0f;
+            float headerSliderWidth = showHeaderSlider ? RowHeightSliderWidth : 0f;
+            var titleRect = new Rect(
+                panelRect.x + 8f,
+                panelRect.y + 2f,
+                Mathf.Max(32f, panelRect.width - 16f - headerSliderWidth - headerSliderSpacing),
+                HeaderHeight - 2f);
             GUI.Label(titleRect, "Favorites", _titleStyle);
+            if (showHeaderSlider)
+            {
+                var sliderRect = new Rect(
+                    panelRect.xMax - RowHeightSliderWidth - 14f,
+                    panelRect.y + Mathf.Floor((HeaderHeight - 14f) * 0.5f) + 1f,
+                    RowHeightSliderWidth,
+                    14f);
+                DrawRowHeightSlider(sliderRect);
+            }
 
             var listRect = new Rect(
                 panelRect.x + 4f,
@@ -349,41 +390,394 @@ namespace NoMorePain.Editor
         {
             float rowHeight = CurrentRowHeight;
             _currentItemsPerPage = Mathf.Max(1, Mathf.FloorToInt(listRect.height / Mathf.Max(1f, rowHeight)));
-            int pageCount = Mathf.Max(1, GetConfiguredMinPageCount());
+            int basePageCount = Mathf.Max(1, GetConfiguredMinPageCount());
+            _page = Mathf.Max(0, _page);
+            int currentPageItems = GetPageItemCount(_page);
+            bool canShowOneMoreEmptyPage = currentPageItems > 0;
+            int pageCount = Mathf.Max(basePageCount, _page + 1);
+            if (canShowOneMoreEmptyPage)
+                pageCount = Mathf.Max(pageCount, _page + 2);
             _currentPageCount = pageCount;
             _page = Mathf.Clamp(_page, 0, pageCount - 1);
 
             var pageItemIndices = GetIndicesForPage(_page);
-            int visibleCount = _currentItemsPerPage > 0
-                ? Mathf.Min(pageItemIndices.Count, _currentItemsPerPage)
-                : pageItemIndices.Count;
-
-            if (visibleCount == 0)
+            int maxStart = Mathf.Max(0, pageItemIndices.Count - _currentItemsPerPage);
+            float dt = GetScrollDeltaTime();
+            float targetStart = Mathf.Clamp(GetPageScrollStart(_page, maxStart), 0f, maxStart);
+            float visualStart = Mathf.Clamp(GetPageScrollVisualStart(_page, targetStart, maxStart), 0f, maxStart);
+            float velocity = GetPageScrollVelocity(_page);
+            bool hasScroll = maxStart > 0;
+            Rect contentRect = listRect;
+            if (hasScroll)
             {
-                DrawEmptyState(listRect);
+                float reducedWidth = Mathf.Max(40f, listRect.width - FavoritesScrollbarWidth - FavoritesScrollbarGap);
+                contentRect = new Rect(listRect.x, listRect.y, reducedWidth, listRect.height);
             }
-            else
+
+            if (_isScrollbarDrag && _scrollbarDragPage != _page)
+                ClearScrollbarDrag();
+
+            bool targetChangedByInput = false;
+            if (!_isRowReorderDrag &&
+                evt.type == EventType.ScrollWheel &&
+                (contentRect.Contains(evt.mousePosition) || (hasScroll && listRect.Contains(evt.mousePosition))) &&
+                maxStart > 0)
             {
-                int rowIndex = 0;
-                for (int v = 0; v < visibleCount; v++)
+                int step = evt.delta.y > 0f ? 1 : (evt.delta.y < 0f ? -1 : 0);
+                if (step != 0)
                 {
-                    int itemIndex = pageItemIndices[v];
-                    if (itemIndex < 0 || itemIndex >= Favorites.Count)
-                        continue;
-
-                    var item = Favorites[itemIndex];
-                    var rowRect = new Rect(listRect.x, listRect.y + rowIndex * rowHeight, listRect.width, rowHeight - 1f);
-                    if (rowRect.yMax > listRect.yMax + 0.1f)
-                        break;
-
-                    if (!(_isRowReorderDrag && itemIndex == _dragSourceIndex))
-                        DrawRow(item, itemIndex, rowRect, evt);
-                    rowIndex++;
+                    float nextTarget = Mathf.Clamp(targetStart + step, 0f, maxStart);
+                    if (!Mathf.Approximately(nextTarget, targetStart))
+                    {
+                        targetStart = nextTarget;
+                        velocity = 0f;
+                        targetChangedByInput = true;
+                        EditorApplication.RepaintProjectWindow();
+                    }
+                    evt.Use();
                 }
             }
 
-            HandleRowReorder(listRect, rowHeight, visibleCount, evt);
+            int visibleStart = Mathf.Clamp(Mathf.RoundToInt(visualStart), 0, maxStart);
+            int remaining = Mathf.Max(0, pageItemIndices.Count - visibleStart);
+            int visibleCount = _currentItemsPerPage > 0
+                ? Mathf.Min(remaining, _currentItemsPerPage)
+                : remaining;
+            Rect scrollTrackRect = default;
+            Rect scrollThumbRect = default;
+            bool hasScrollGeometry = hasScroll &&
+                                     TryGetScrollGeometry(listRect, contentRect, pageItemIndices.Count, visibleCount, visualStart, maxStart,
+                                         out scrollTrackRect, out scrollThumbRect);
+
+            if (hasScrollGeometry)
+            {
+                bool overTrack = scrollTrackRect.Contains(evt.mousePosition);
+                bool overThumb = scrollThumbRect.Contains(evt.mousePosition);
+
+                if (evt.type == EventType.MouseDown && evt.button == 0 && overTrack)
+                {
+                    _isScrollbarDrag = true;
+                    _scrollbarDragPage = _page;
+                    _scrollbarDragGrabOffsetY = overThumb
+                        ? evt.mousePosition.y - scrollThumbRect.yMin
+                        : scrollThumbRect.height * 0.5f;
+
+                    if (!overThumb)
+                    {
+                        float desiredTop = evt.mousePosition.y - _scrollbarDragGrabOffsetY;
+                        float nextTarget = GetScrollStartFromThumbTop(desiredTop, scrollTrackRect, scrollThumbRect.height, maxStart);
+                        if (!Mathf.Approximately(nextTarget, targetStart))
+                        {
+                            if (dt > 0f)
+                                velocity = (nextTarget - targetStart) / dt;
+                            targetStart = nextTarget;
+                            targetChangedByInput = true;
+                            EditorApplication.RepaintProjectWindow();
+                        }
+                    }
+                    evt.Use();
+                }
+                else if (evt.type == EventType.MouseDrag && _isScrollbarDrag && _scrollbarDragPage == _page)
+                {
+                    float desiredTop = evt.mousePosition.y - _scrollbarDragGrabOffsetY;
+                    float nextTarget = GetScrollStartFromThumbTop(desiredTop, scrollTrackRect, scrollThumbRect.height, maxStart);
+                    if (!Mathf.Approximately(nextTarget, targetStart))
+                    {
+                        if (dt > 0f)
+                            velocity = (nextTarget - targetStart) / dt;
+                        targetStart = nextTarget;
+                        targetChangedByInput = true;
+                        EditorApplication.RepaintProjectWindow();
+                    }
+                    evt.Use();
+                }
+            }
+
+            if (evt.type == EventType.MouseUp && evt.button == 0 && _isScrollbarDrag)
+                ClearScrollbarDrag();
+
+            if (TryApplyReorderEdgeAutoScroll(contentRect, rowHeight, dt, maxStart, ref targetStart, ref velocity))
+            {
+                targetChangedByInput = true;
+                EditorApplication.RepaintProjectWindow();
+            }
+
+            bool draggingScrollThisPage = _isScrollbarDrag && _scrollbarDragPage == _page;
+            if (!draggingScrollThisPage && maxStart > 0)
+            {
+                if (Mathf.Abs(velocity) > ScrollMinVelocity)
+                {
+                    float rawTarget = targetStart + velocity * dt;
+                    float clampedTarget = Mathf.Clamp(rawTarget, 0f, maxStart);
+                    bool hitEdge = !Mathf.Approximately(rawTarget, clampedTarget);
+                    targetStart = clampedTarget;
+                    if (hitEdge)
+                    {
+                        velocity = 0f;
+                    }
+                    else
+                    {
+                        velocity = Mathf.MoveTowards(velocity, 0f, ScrollInertiaDamping * dt);
+                    }
+                }
+                else if (!targetChangedByInput)
+                {
+                    velocity = 0f;
+                }
+            }
+            else if (maxStart <= 0)
+            {
+                targetStart = 0f;
+                visualStart = 0f;
+                velocity = 0f;
+            }
+
+            float smoothStrength = draggingScrollThisPage ? ScrollDragSmooth : ScrollVisualSmooth;
+            float smoothT = 1f - Mathf.Exp(-Mathf.Max(1f, smoothStrength) * Mathf.Max(0.0001f, dt));
+            visualStart = Mathf.Lerp(visualStart, targetStart, smoothT);
+            if (Mathf.Abs(targetStart - visualStart) < 0.001f)
+                visualStart = targetStart;
+
+            SetPageScrollStart(_page, targetStart);
+            SetPageScrollVisualStart(_page, visualStart);
+            SetPageScrollVelocity(_page, velocity);
+
+            visibleStart = Mathf.Clamp(Mathf.FloorToInt(visualStart), 0, maxStart);
+            float rowOffsetY = -(visualStart - visibleStart) * rowHeight;
+            remaining = Mathf.Max(0, pageItemIndices.Count - visibleStart);
+            int logicalVisibleCount = _currentItemsPerPage > 0
+                ? Mathf.Min(remaining, _currentItemsPerPage)
+                : remaining;
+            bool hasFractionalOffset = (visualStart - visibleStart) > 0.001f;
+            int drawVisibleCount = Mathf.Min(remaining, logicalVisibleCount + (hasFractionalOffset ? 1 : 0));
+            hasScrollGeometry = hasScroll &&
+                                TryGetScrollGeometry(listRect, contentRect, pageItemIndices.Count, logicalVisibleCount, visualStart, maxStart,
+                                    out scrollTrackRect, out scrollThumbRect);
+
+            if (_isRowReorderDrag && _dragSourcePage == _page)
+            {
+                bool nearListByX = _dragMousePos.x >= contentRect.xMin - 24f && _dragMousePos.x <= contentRect.xMax + 24f;
+                bool nearListByY = _dragMousePos.y >= contentRect.yMin - 6f && _dragMousePos.y <= contentRect.yMax + 6f;
+                if (nearListByX && nearListByY)
+                {
+                    int localInsert = GetInsertSlotFromMouseY(contentRect, rowHeight, logicalVisibleCount, _dragMousePos.y, rowOffsetY);
+                    _dragInsertIndex = visibleStart + localInsert;
+                }
+            }
+
+            bool needsAnimationRepaint = hasScroll &&
+                                         (Mathf.Abs(targetStart - visualStart) > 0.001f || Mathf.Abs(velocity) > ScrollMinVelocity);
+            if (needsAnimationRepaint)
+                EditorApplication.RepaintProjectWindow();
+
+            if (logicalVisibleCount == 0)
+            {
+                DrawEmptyState(contentRect);
+            }
+            else
+            {
+                if (evt.type == EventType.Repaint)
+                {
+                    GUI.BeginGroup(contentRect);
+                    Vector2 localMouse = Event.current.mousePosition;
+                    int rowIndex = 0;
+                    for (int v = 0; v < drawVisibleCount; v++)
+                    {
+                        int pageSlot = visibleStart + v;
+                        if (pageSlot < 0 || pageSlot >= pageItemIndices.Count)
+                            break;
+
+                        int itemIndex = pageItemIndices[pageSlot];
+                        if (itemIndex < 0 || itemIndex >= Favorites.Count)
+                            continue;
+
+                        var item = Favorites[itemIndex];
+                        var rowRect = new Rect(0f, rowIndex * rowHeight + rowOffsetY, contentRect.width, rowHeight - 1f);
+                        if (rowRect.yMin > contentRect.height + 0.1f)
+                            break;
+                        if (rowRect.yMax < -0.1f)
+                        {
+                            rowIndex++;
+                            continue;
+                        }
+
+                        if (!(_isRowReorderDrag && itemIndex == _dragSourceIndex))
+                            DrawRowVisual(item, rowRect, localMouse);
+                        rowIndex++;
+                    }
+                    GUI.EndGroup();
+                }
+                else
+                {
+                    int rowIndex = 0;
+                    for (int v = 0; v < drawVisibleCount; v++)
+                    {
+                        int pageSlot = visibleStart + v;
+                        if (pageSlot < 0 || pageSlot >= pageItemIndices.Count)
+                            break;
+
+                        int itemIndex = pageItemIndices[pageSlot];
+                        if (itemIndex < 0 || itemIndex >= Favorites.Count)
+                            continue;
+
+                        var item = Favorites[itemIndex];
+                        var rowRect = new Rect(contentRect.x, contentRect.y + rowIndex * rowHeight + rowOffsetY, contentRect.width, rowHeight - 1f);
+                        if (rowRect.yMin > contentRect.yMax + 0.1f)
+                            break;
+                        if (rowRect.yMax < contentRect.yMin - 0.1f)
+                        {
+                            rowIndex++;
+                            continue;
+                        }
+
+                        if (!(_isRowReorderDrag && itemIndex == _dragSourceIndex))
+                            DrawRow(item, itemIndex, rowRect, evt);
+                        rowIndex++;
+                    }
+                }
+            }
+
+            if (evt.type == EventType.Repaint && hasScrollGeometry)
+            {
+                bool thumbHovered = scrollThumbRect.Contains(evt.mousePosition);
+                bool thumbDragging = _isScrollbarDrag && _scrollbarDragPage == _page;
+                DrawScrollIndicator(scrollTrackRect, scrollThumbRect, thumbHovered, thumbDragging);
+            }
+
+            HandleRowReorder(contentRect, rowHeight, logicalVisibleCount, visibleStart, rowOffsetY, evt);
             return pageCount;
+        }
+
+        private static bool TryGetScrollGeometry(
+            Rect listRect,
+            Rect contentRect,
+            int totalCount,
+            int visibleCount,
+            float visibleStart,
+            int maxStart,
+            out Rect trackRect,
+            out Rect thumbRect)
+        {
+            trackRect = default;
+            thumbRect = default;
+            if (totalCount <= 0 || maxStart <= 0 || visibleCount <= 0)
+                return false;
+
+            float trackX = contentRect.xMax + FavoritesScrollbarGap;
+            trackRect = new Rect(trackX, listRect.y + 1f, FavoritesScrollbarWidth, Mathf.Max(8f, listRect.height - 2f));
+
+            float ratio = Mathf.Clamp01((float)visibleCount / Mathf.Max(1, totalCount));
+            float thumbHeight = Mathf.Clamp(trackRect.height * ratio, 18f, trackRect.height);
+            float travel = Mathf.Max(0f, trackRect.height - thumbHeight);
+            float normalized = maxStart > 0 ? Mathf.Clamp01(visibleStart / maxStart) : 0f;
+            float thumbY = trackRect.y + travel * normalized;
+            thumbRect = new Rect(trackRect.x, thumbY, trackRect.width, thumbHeight);
+            return true;
+        }
+
+        private static float GetScrollStartFromThumbTop(float thumbTop, Rect trackRect, float thumbHeight, int maxStart)
+        {
+            if (maxStart <= 0)
+                return 0f;
+
+            float travel = Mathf.Max(0.0001f, trackRect.height - thumbHeight);
+            float normalized = Mathf.Clamp01((thumbTop - trackRect.y) / travel);
+            return Mathf.Clamp(normalized * maxStart, 0f, maxStart);
+        }
+
+        private static bool TryApplyReorderEdgeAutoScroll(
+            Rect contentRect,
+            float rowHeight,
+            float dt,
+            int maxStart,
+            ref float targetStart,
+            ref float velocity)
+        {
+            if (!_isRowReorderDrag || _dragSourceIndex < 0)
+                return false;
+            if (_dragSourcePage != _page)
+                return false;
+            if (_isScrollbarDrag)
+                return false;
+            if (maxStart <= 0)
+                return false;
+
+            float edgeSize = Mathf.Clamp(rowHeight * 0.85f, 12f, 30f);
+            float xPad = 24f;
+            bool inXRange = _dragMousePos.x >= contentRect.xMin - xPad && _dragMousePos.x <= contentRect.xMax + xPad;
+            if (!inXRange)
+                return false;
+
+            bool nearTop = _dragMousePos.y <= contentRect.yMin + edgeSize;
+            bool nearBottom = _dragMousePos.y >= contentRect.yMax - edgeSize;
+            if (!nearTop && !nearBottom)
+                return false;
+
+            float strength = nearTop
+                ? Mathf.Clamp01((contentRect.yMin + edgeSize - _dragMousePos.y) / Mathf.Max(1f, edgeSize))
+                : Mathf.Clamp01((_dragMousePos.y - (contentRect.yMax - edgeSize)) / Mathf.Max(1f, edgeSize));
+
+            float rowsPerSecond = Mathf.Lerp(ReorderAutoScrollRowsPerSecondMin, ReorderAutoScrollRowsPerSecondMax, strength);
+            float step = rowsPerSecond * Mathf.Max(0.001f, dt);
+            float nextTarget = Mathf.Clamp(targetStart + (nearTop ? -step : step), 0f, maxStart);
+            if (Mathf.Abs(nextTarget - targetStart) <= 0.0001f)
+                return false;
+
+            targetStart = nextTarget;
+            velocity = 0f;
+            return true;
+        }
+
+        private static void DrawScrollIndicator(Rect trackRect, Rect thumbRect, bool thumbHovered, bool thumbDragging)
+        {
+            var trackColor = EditorGUIUtility.isProSkin
+                ? new Color(1f, 1f, 1f, 0.08f)
+                : new Color(0f, 0f, 0f, 0.12f);
+            DrawRoundedFilledRect(trackRect, trackColor, trackRect.width * 0.5f);
+
+            var thumbColor = EditorGUIUtility.isProSkin
+                ? (thumbDragging
+                    ? new Color(0.98f, 0.98f, 0.98f, 0.68f)
+                    : (thumbHovered
+                        ? new Color(0.96f, 0.96f, 0.96f, 0.58f)
+                        : new Color(0.93f, 0.93f, 0.93f, 0.45f)))
+                : (thumbDragging
+                    ? new Color(0.12f, 0.12f, 0.12f, 0.62f)
+                    : (thumbHovered
+                        ? new Color(0.14f, 0.14f, 0.14f, 0.52f)
+                        : new Color(0.15f, 0.15f, 0.15f, 0.42f)));
+            DrawRoundedFilledRect(thumbRect, thumbColor, thumbRect.width * 0.5f);
+        }
+
+        private static void DrawRoundedFilledRect(Rect rect, Color color, float radius)
+        {
+            if (rect.width <= 0f || rect.height <= 0f)
+                return;
+
+            float r = Mathf.Clamp(radius, 0f, Mathf.Min(rect.width, rect.height) * 0.5f);
+            if (r <= 0.01f)
+            {
+                EditorGUI.DrawRect(rect, color);
+                return;
+            }
+
+            int arcSegments = Mathf.Clamp(Mathf.CeilToInt(r * 0.8f), 4, 12);
+            var points = new List<Vector3>(arcSegments * 4 + 4);
+
+            Vector2 tl = new Vector2(rect.xMin + r, rect.yMin + r);
+            Vector2 tr = new Vector2(rect.xMax - r, rect.yMin + r);
+            Vector2 br = new Vector2(rect.xMax - r, rect.yMax - r);
+            Vector2 bl = new Vector2(rect.xMin + r, rect.yMax - r);
+
+            AppendArc(points, tl, r, 180f, 270f, arcSegments, includeStart: true);
+            AppendArc(points, tr, r, 270f, 360f, arcSegments, includeStart: false);
+            AppendArc(points, br, r, 0f, 90f, arcSegments, includeStart: false);
+            AppendArc(points, bl, r, 90f, 180f, arcSegments, includeStart: false);
+
+            var previousColor = Handles.color;
+            Handles.color = color;
+            Handles.DrawAAConvexPolygon(points.ToArray());
+            Handles.color = previousColor;
         }
 
         private static void DrawEmptyState(Rect listRect)
@@ -411,58 +805,12 @@ namespace NoMorePain.Editor
 
         private static void DrawRow(FavoriteItem item, int itemIndex, Rect rowRect, Event evt)
         {
-            bool isHover = rowRect.Contains(evt.mousePosition);
-            bool isSelected = IsItemSelected(item);
-            string itemPath = TryResolveAssetPath(item);
-            bool isFolder = !string.IsNullOrEmpty(itemPath) && AssetDatabase.IsValidFolder(itemPath);
-            Color folderColor = default;
-            bool hasFolderColor = isFolder && ProjectFolderStyleManager.TryGetColorForFolderPath(itemPath, out folderColor);
-            bool drawRowTint = hasFolderColor && NMPSettings.ProjectRowColors;
-            bool drawIconTint = hasFolderColor && NMPSettings.ProjectFolderColors;
-
             if (evt.type == EventType.Repaint)
-            {
-                if (drawRowTint)
-                {
-                    EditorGUI.DrawRect(rowRect, new Color(folderColor.r, folderColor.g, folderColor.b, 0.30f));
-                    EditorGUI.DrawRect(new Rect(rowRect.x, rowRect.y, 3f, rowRect.height), new Color(folderColor.r, folderColor.g, folderColor.b, 1f));
-                }
+                DrawRowVisual(item, rowRect, evt.mousePosition);
 
-                if (isSelected)
-                {
-                    var sel = EditorGUIUtility.isProSkin
-                        ? new Color(NMPStyles.AccentColor.r, NMPStyles.AccentColor.g, NMPStyles.AccentColor.b, 0.35f)
-                        : new Color(NMPStyles.AccentColor.r, NMPStyles.AccentColor.g, NMPStyles.AccentColor.b, 0.28f);
-                    EditorGUI.DrawRect(rowRect, sel);
-                }
-                else if (isHover)
-                {
-                    var hover = EditorGUIUtility.isProSkin
-                        ? new Color(1f, 1f, 1f, 0.08f)
-                        : new Color(0f, 0f, 0f, 0.08f);
-                    EditorGUI.DrawRect(rowRect, hover);
-                }
-            }
-
-            float rowScale = Mathf.InverseLerp(BaseRowHeight - 1f, MaxRowHeight - 1f, rowRect.height);
-            float iconSize = Mathf.Clamp(rowRect.height * 0.72f, 16f, 44f);
-            float iconY = rowRect.y + Mathf.Floor((rowRect.height - iconSize) * 0.5f);
-            var iconRect = new Rect(rowRect.x + 4f, iconY, iconSize, iconSize);
             float removeSize = Mathf.Clamp(rowRect.height * 0.45f, 14f, 30f);
             float removeY = rowRect.y + Mathf.Floor((rowRect.height - removeSize) * 0.5f);
             var removeRect = new Rect(rowRect.xMax - removeSize - 4f, removeY, removeSize, removeSize);
-            bool removeHover = removeRect.Contains(evt.mousePosition);
-
-            float textX = iconRect.xMax + 5f;
-            var textRect = new Rect(textX, rowRect.y, Mathf.Max(0f, removeRect.xMin - textX - 4f), rowRect.height);
-            int textFontSize = Mathf.Clamp(Mathf.RoundToInt(Mathf.Lerp(11f, 16f, rowScale)), 11, 16);
-            GUIStyle rowTextStyle = GetScaledRowStyle(textFontSize);
-
-            DrawFavoriteIcon(item, iconRect, itemPath, isFolder, drawIconTint, folderColor);
-            if (isFolder && NMPSettings.ProjectBadgeIcons)
-                DrawFolderBadge(itemPath, iconRect);
-            GUI.Label(textRect, GetDisplayName(item), rowTextStyle);
-            DrawRemoveGlyph(removeRect, removeHover);
 
             if (evt.type == EventType.MouseDown && evt.button == 0 && removeRect.Contains(evt.mousePosition))
             {
@@ -498,7 +846,61 @@ namespace NoMorePain.Editor
             }
         }
 
-        private static void HandleRowReorder(Rect listRect, float rowHeight, int visibleCount, Event evt)
+        private static void DrawRowVisual(FavoriteItem item, Rect rowRect, Vector2 mousePosition)
+        {
+            bool isHover = rowRect.Contains(mousePosition);
+            bool isSelected = IsItemSelected(item);
+            string itemPath = TryResolveAssetPath(item);
+            bool isFolder = !string.IsNullOrEmpty(itemPath) && AssetDatabase.IsValidFolder(itemPath);
+            Color folderColor = default;
+            bool hasFolderColor = isFolder && ProjectFolderStyleManager.TryGetColorForFolderPath(itemPath, out folderColor);
+            bool drawRowTint = hasFolderColor && NMPSettings.ProjectRowColors;
+            bool drawIconTint = hasFolderColor && NMPSettings.ProjectFolderColors;
+
+            if (drawRowTint)
+            {
+                EditorGUI.DrawRect(rowRect, new Color(folderColor.r, folderColor.g, folderColor.b, 0.30f));
+                EditorGUI.DrawRect(new Rect(rowRect.x, rowRect.y, 3f, rowRect.height), new Color(folderColor.r, folderColor.g, folderColor.b, 1f));
+            }
+
+            if (isSelected)
+            {
+                var sel = EditorGUIUtility.isProSkin
+                    ? new Color(NMPStyles.AccentColor.r, NMPStyles.AccentColor.g, NMPStyles.AccentColor.b, 0.35f)
+                    : new Color(NMPStyles.AccentColor.r, NMPStyles.AccentColor.g, NMPStyles.AccentColor.b, 0.28f);
+                EditorGUI.DrawRect(rowRect, sel);
+            }
+            else if (isHover)
+            {
+                var hover = EditorGUIUtility.isProSkin
+                    ? new Color(1f, 1f, 1f, 0.08f)
+                    : new Color(0f, 0f, 0f, 0.08f);
+                EditorGUI.DrawRect(rowRect, hover);
+            }
+
+            float rowScale = Mathf.InverseLerp(BaseRowHeight - 1f, MaxRowHeight - 1f, rowRect.height);
+            float iconSize = Mathf.Clamp(rowRect.height * 0.72f, 16f, 44f);
+            float iconY = rowRect.y + Mathf.Floor((rowRect.height - iconSize) * 0.5f);
+            var iconRect = new Rect(rowRect.x + 4f, iconY, iconSize, iconSize);
+            float removeSize = Mathf.Clamp(rowRect.height * 0.45f, 14f, 30f);
+            float removeY = rowRect.y + Mathf.Floor((rowRect.height - removeSize) * 0.5f);
+            var removeRect = new Rect(rowRect.xMax - removeSize - 4f, removeY, removeSize, removeSize);
+            bool removeHover = removeRect.Contains(mousePosition);
+
+            float textX = iconRect.xMax + 5f;
+            var textRect = new Rect(textX, rowRect.y, Mathf.Max(0f, removeRect.xMin - textX - 4f), rowRect.height);
+            int textFontSize = Mathf.Clamp(Mathf.RoundToInt(Mathf.Lerp(11f, 16f, rowScale)), 11, 16);
+            GUIStyle rowTextStyle = GetScaledRowStyle(textFontSize);
+
+            DrawFavoriteIcon(item, iconRect, itemPath, isFolder, drawIconTint, folderColor);
+            if (isFolder && NMPSettings.ProjectBadgeIcons)
+                DrawFolderBadge(itemPath, iconRect);
+            GUI.Label(textRect, GetDisplayName(item), rowTextStyle);
+            if (isHover || removeHover)
+                DrawRemoveGlyph(removeRect, removeHover);
+        }
+
+        private static void HandleRowReorder(Rect listRect, float rowHeight, int visibleCount, int visibleStart, float rowOffsetY, Event evt)
         {
             if (evt.type == EventType.MouseDrag && _pressedRowIndex >= 0)
             {
@@ -521,7 +923,8 @@ namespace NoMorePain.Editor
                         return;
                     }
 
-                    _dragInsertIndex = GetInsertSlotFromMouseY(listRect, rowHeight, visibleCount, evt.mousePosition.y);
+                    int localInsert = GetInsertSlotFromMouseY(listRect, rowHeight, visibleCount, evt.mousePosition.y, rowOffsetY);
+                    _dragInsertIndex = visibleStart + localInsert;
                     EditorApplication.RepaintProjectWindow();
                     evt.Use();
                 }
@@ -529,22 +932,24 @@ namespace NoMorePain.Editor
 
             if (evt.type == EventType.Repaint && _isRowReorderDrag)
             {
-                DrawReorderInsertionLine(listRect, rowHeight, visibleCount, _dragInsertIndex);
+                DrawReorderInsertionLine(listRect, rowHeight, visibleCount, _dragInsertIndex - visibleStart, rowOffsetY);
                 DrawDraggedRowPreview(listRect, rowHeight);
             }
 
             if (evt.type == EventType.MouseUp && evt.button == 0)
             {
+                bool hadReorderDrag = _isRowReorderDrag;
                 bool didReorder = false;
                 bool didCompact = false;
-                if (_isRowReorderDrag && _dragSourceIndex >= 0 && _dragSourceIndex < Favorites.Count)
+                if (hadReorderDrag && _dragSourceIndex >= 0 && _dragSourceIndex < Favorites.Count)
                 {
                     int targetPage = Mathf.Max(0, _page);
                     int insert = Mathf.Clamp(_dragInsertIndex, 0, GetPageItemCount(targetPage));
                     didReorder = MoveFavoriteItem(_dragSourceIndex, targetPage, insert);
                 }
 
-                didCompact = CompactPageLayout();
+                if (hadReorderDrag)
+                    didCompact = CompactPageLayout();
                 if (didReorder || didCompact)
                 {
                     SaveData();
@@ -598,30 +1003,33 @@ namespace NoMorePain.Editor
             return true;
         }
 
-        private static int GetInsertSlotFromMouseY(Rect listRect, float rowHeight, int visibleCount, float mouseY)
+        private static int GetInsertSlotFromMouseY(Rect listRect, float rowHeight, int visibleCount, float mouseY, float rowOffsetY)
         {
             if (visibleCount <= 0)
                 return 0;
 
-            if (mouseY <= listRect.yMin + 1f)
+            float yMin = listRect.yMin + rowOffsetY;
+            if (mouseY <= yMin + 1f)
                 return 0;
-            if (mouseY >= listRect.yMin + visibleCount * rowHeight - 1f)
+            if (mouseY >= yMin + visibleCount * rowHeight - 1f)
                 return visibleCount;
 
-            float localY = mouseY - listRect.yMin;
+            float localY = mouseY - yMin;
             int relative = Mathf.Clamp(Mathf.FloorToInt(localY / rowHeight), 0, visibleCount - 1);
-            float rowTop = listRect.yMin + relative * rowHeight;
+            float rowTop = yMin + relative * rowHeight;
             bool firstHalf = mouseY < rowTop + rowHeight * 0.5f;
             int insert = relative + (firstHalf ? 0 : 1);
             return Mathf.Clamp(insert, 0, visibleCount);
         }
 
-        private static void DrawReorderInsertionLine(Rect listRect, float rowHeight, int visibleCount, int insertSlot)
+        private static void DrawReorderInsertionLine(Rect listRect, float rowHeight, int visibleCount, int insertSlot, float rowOffsetY)
         {
             int clampedInsert = Mathf.Clamp(insertSlot, 0, Mathf.Max(0, visibleCount));
+            float yBase = listRect.yMin + rowOffsetY;
             float y = clampedInsert <= 0
-                ? listRect.yMin
-                : (clampedInsert >= visibleCount ? listRect.yMin + visibleCount * rowHeight : listRect.yMin + clampedInsert * rowHeight);
+                ? yBase
+                : (clampedInsert >= visibleCount ? yBase + visibleCount * rowHeight : yBase + clampedInsert * rowHeight);
+            y = Mathf.Clamp(y, listRect.yMin, listRect.yMax);
 
             var lineColor = new Color(NMPStyles.AccentColor.r, NMPStyles.AccentColor.g, NMPStyles.AccentColor.b, 0.95f);
             EditorGUI.DrawRect(new Rect(listRect.x + 2f, y - 1f, Mathf.Max(0f, listRect.width - 4f), 2f), lineColor);
@@ -690,11 +1098,23 @@ namespace NoMorePain.Editor
             int count = Mathf.Min(Favorites.Count, FavoritePages.Count);
             if (count <= 0)
             {
-                bool changedEmpty = _manualMinPageCount != 1 || _page != 0 || PageNames.Count > 0;
+                bool changedEmpty = _manualMinPageCount != 1 ||
+                                    _page != 0 ||
+                                    PageNames.Count > 0 ||
+                                    PageScrollStarts.Count > 0 ||
+                                    PageScrollVisualStarts.Count > 0 ||
+                                    PageScrollVelocities.Count > 0;
                 _manualMinPageCount = 1;
                 _page = 0;
                 if (PageNames.Count > 0)
                     PageNames.Clear();
+                if (PageScrollStarts.Count > 0)
+                    PageScrollStarts.Clear();
+                if (PageScrollVisualStarts.Count > 0)
+                    PageScrollVisualStarts.Clear();
+                if (PageScrollVelocities.Count > 0)
+                    PageScrollVelocities.Clear();
+                _lastScrollAnimationTime = -1d;
                 return changedEmpty;
             }
 
@@ -759,6 +1179,130 @@ namespace NoMorePain.Editor
                 }
             }
 
+            if (PageScrollStarts.Count > 0)
+            {
+                var remappedScroll = new Dictionary<int, float>();
+                foreach (var kv in PageScrollStarts)
+                {
+                    if (!remap.TryGetValue(Mathf.Max(0, kv.Key), out int newIndex))
+                        continue;
+
+                    float value = Mathf.Max(0f, kv.Value);
+                    if (value <= 0)
+                        continue;
+
+                    if (remappedScroll.TryGetValue(newIndex, out float existing))
+                        remappedScroll[newIndex] = Mathf.Min(existing, value);
+                    else
+                        remappedScroll[newIndex] = value;
+                }
+
+                bool scrollChanged = remappedScroll.Count != PageScrollStarts.Count;
+                if (!scrollChanged)
+                {
+                    foreach (var kv in remappedScroll)
+                    {
+                        if (!PageScrollStarts.TryGetValue(kv.Key, out float oldValue) || !Mathf.Approximately(oldValue, kv.Value))
+                        {
+                            scrollChanged = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (scrollChanged)
+                {
+                    PageScrollStarts.Clear();
+                    foreach (var kv in remappedScroll)
+                        PageScrollStarts[kv.Key] = kv.Value;
+                    changed = true;
+                }
+            }
+
+            if (PageScrollVisualStarts.Count > 0)
+            {
+                var remappedVisual = new Dictionary<int, float>();
+                foreach (var kv in PageScrollVisualStarts)
+                {
+                    if (!remap.TryGetValue(Mathf.Max(0, kv.Key), out int newIndex))
+                        continue;
+
+                    float value = Mathf.Max(0f, kv.Value);
+                    if (value <= 0f)
+                        continue;
+
+                    if (remappedVisual.TryGetValue(newIndex, out float existing))
+                        remappedVisual[newIndex] = Mathf.Min(existing, value);
+                    else
+                        remappedVisual[newIndex] = value;
+                }
+
+                bool visualChanged = remappedVisual.Count != PageScrollVisualStarts.Count;
+                if (!visualChanged)
+                {
+                    foreach (var kv in remappedVisual)
+                    {
+                        if (!PageScrollVisualStarts.TryGetValue(kv.Key, out float oldValue) || !Mathf.Approximately(oldValue, kv.Value))
+                        {
+                            visualChanged = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (visualChanged)
+                {
+                    PageScrollVisualStarts.Clear();
+                    foreach (var kv in remappedVisual)
+                        PageScrollVisualStarts[kv.Key] = kv.Value;
+                    changed = true;
+                }
+            }
+
+            if (PageScrollVelocities.Count > 0)
+            {
+                var remappedVelocity = new Dictionary<int, float>();
+                foreach (var kv in PageScrollVelocities)
+                {
+                    if (!remap.TryGetValue(Mathf.Max(0, kv.Key), out int newIndex))
+                        continue;
+
+                    float value = kv.Value;
+                    if (Mathf.Abs(value) <= ScrollMinVelocity)
+                        continue;
+
+                    if (remappedVelocity.TryGetValue(newIndex, out float existing))
+                    {
+                        remappedVelocity[newIndex] = Mathf.Abs(value) > Mathf.Abs(existing) ? value : existing;
+                    }
+                    else
+                    {
+                        remappedVelocity[newIndex] = value;
+                    }
+                }
+
+                bool velocityChanged = remappedVelocity.Count != PageScrollVelocities.Count;
+                if (!velocityChanged)
+                {
+                    foreach (var kv in remappedVelocity)
+                    {
+                        if (!PageScrollVelocities.TryGetValue(kv.Key, out float oldValue) || !Mathf.Approximately(oldValue, kv.Value))
+                        {
+                            velocityChanged = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (velocityChanged)
+                {
+                    PageScrollVelocities.Clear();
+                    foreach (var kv in remappedVelocity)
+                        PageScrollVelocities[kv.Key] = kv.Value;
+                    changed = true;
+                }
+            }
+
             int desiredMinPages = Mathf.Max(1, usedPages.Count);
             if (_manualMinPageCount != desiredMinPages)
             {
@@ -810,6 +1354,97 @@ namespace NoMorePain.Editor
                     count++;
             }
             return count;
+        }
+
+        private static float GetPageScrollStart(int pageIndex, int maxStart)
+        {
+            int safePage = Mathf.Max(0, pageIndex);
+            float clampedMax = Mathf.Max(0, maxStart);
+            float current = 0f;
+            if (PageScrollStarts.TryGetValue(safePage, out var stored))
+                current = Mathf.Clamp(stored, 0, clampedMax);
+
+            if (current <= 0f)
+            {
+                if (PageScrollStarts.ContainsKey(safePage))
+                    PageScrollStarts.Remove(safePage);
+                return 0f;
+            }
+
+            PageScrollStarts[safePage] = current;
+            return current;
+        }
+
+        private static void SetPageScrollStart(int pageIndex, float start)
+        {
+            int safePage = Mathf.Max(0, pageIndex);
+            float value = Mathf.Max(0f, start);
+            if (value <= 0f)
+                PageScrollStarts.Remove(safePage);
+            else
+                PageScrollStarts[safePage] = value;
+        }
+
+        private static float GetPageScrollVisualStart(int pageIndex, float fallback, int maxStart)
+        {
+            int safePage = Mathf.Max(0, pageIndex);
+            float clampedMax = Mathf.Max(0, maxStart);
+            float current = fallback;
+            if (PageScrollVisualStarts.TryGetValue(safePage, out var stored))
+                current = stored;
+
+            current = Mathf.Clamp(current, 0f, clampedMax);
+            if (current <= 0f)
+            {
+                PageScrollVisualStarts.Remove(safePage);
+                return 0f;
+            }
+
+            PageScrollVisualStarts[safePage] = current;
+            return current;
+        }
+
+        private static void SetPageScrollVisualStart(int pageIndex, float start)
+        {
+            int safePage = Mathf.Max(0, pageIndex);
+            float value = Mathf.Max(0f, start);
+            if (value <= 0f)
+                PageScrollVisualStarts.Remove(safePage);
+            else
+                PageScrollVisualStarts[safePage] = value;
+        }
+
+        private static float GetPageScrollVelocity(int pageIndex)
+        {
+            int safePage = Mathf.Max(0, pageIndex);
+            if (PageScrollVelocities.TryGetValue(safePage, out var value))
+                return value;
+            return 0f;
+        }
+
+        private static void SetPageScrollVelocity(int pageIndex, float velocity)
+        {
+            int safePage = Mathf.Max(0, pageIndex);
+            if (Mathf.Abs(velocity) <= ScrollMinVelocity)
+                PageScrollVelocities.Remove(safePage);
+            else
+                PageScrollVelocities[safePage] = velocity;
+        }
+
+        private static float GetScrollDeltaTime()
+        {
+            double now = EditorApplication.timeSinceStartup;
+            if (_lastScrollAnimationTime < 0d)
+            {
+                _lastScrollAnimationTime = now;
+                return 1f / 60f;
+            }
+
+            float dt = (float)(now - _lastScrollAnimationTime);
+            _lastScrollAnimationTime = now;
+            if (dt <= 0f || float.IsNaN(dt) || float.IsInfinity(dt))
+                return 1f / 60f;
+            return Mathf.Clamp(dt, 1f / 240f, 0.1f);
         }
 
         private static int GetSlotInPage(int itemIndex, int pageIndex)
@@ -903,7 +1538,143 @@ namespace NoMorePain.Editor
             else
                 menu.AddDisabledItem(new GUIContent("Reset Name"));
 
+            menu.AddSeparator(string.Empty);
+            menu.AddItem(new GUIContent("Delete Page"), false, () => DeletePage(safeIndex));
+
             menu.ShowAsContext();
+        }
+
+        private static void DeletePage(int pageIndex)
+        {
+            int safeIndex = Mathf.Max(0, pageIndex);
+            bool changed = false;
+
+            if (_isEditingPageName && _editingPageIndex == safeIndex)
+                EndPageNameEdit();
+
+            for (int i = Favorites.Count - 1; i >= 0; i--)
+            {
+                if (i < 0 || i >= FavoritePages.Count)
+                    continue;
+
+                int page = Mathf.Max(0, FavoritePages[i]);
+                if (page == safeIndex)
+                {
+                    Favorites.RemoveAt(i);
+                    FavoritePages.RemoveAt(i);
+                    changed = true;
+                }
+                else if (page > safeIndex)
+                {
+                    FavoritePages[i] = page - 1;
+                    changed = true;
+                }
+            }
+
+            changed |= ShiftPageNameMapAfterDelete(safeIndex);
+            changed |= ShiftPageFloatMapAfterDelete(PageScrollStarts, safeIndex, dropZeroValues: true);
+            changed |= ShiftPageFloatMapAfterDelete(PageScrollVisualStarts, safeIndex, dropZeroValues: true);
+            changed |= ShiftPageFloatMapAfterDelete(PageScrollVelocities, safeIndex, dropZeroValues: false);
+
+            int oldPage = _page;
+            if (_page > safeIndex)
+                _page--;
+            else if (_page == safeIndex)
+                _page = Mathf.Max(0, _page - 1);
+            if (_page != oldPage)
+                changed = true;
+
+            changed |= CompactPageLayout();
+
+            if (changed)
+                SaveData();
+
+            EditorApplication.RepaintProjectWindow();
+        }
+
+        private static bool ShiftPageNameMapAfterDelete(int deletedPageIndex)
+        {
+            if (PageNames.Count == 0)
+                return false;
+
+            var remapped = new Dictionary<int, string>();
+            foreach (var kv in PageNames)
+            {
+                int index = Mathf.Max(0, kv.Key);
+                if (index == deletedPageIndex)
+                    continue;
+
+                int newIndex = index > deletedPageIndex ? index - 1 : index;
+                if (string.IsNullOrWhiteSpace(kv.Value))
+                    continue;
+                remapped[newIndex] = kv.Value;
+            }
+
+            bool changed = remapped.Count != PageNames.Count;
+            if (!changed)
+            {
+                foreach (var kv in remapped)
+                {
+                    if (!PageNames.TryGetValue(kv.Key, out var oldValue) ||
+                        !string.Equals(oldValue, kv.Value, StringComparison.Ordinal))
+                    {
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!changed)
+                return false;
+
+            PageNames.Clear();
+            foreach (var kv in remapped)
+                PageNames[kv.Key] = kv.Value;
+            return true;
+        }
+
+        private static bool ShiftPageFloatMapAfterDelete(Dictionary<int, float> map, int deletedPageIndex, bool dropZeroValues)
+        {
+            if (map == null || map.Count == 0)
+                return false;
+
+            var remapped = new Dictionary<int, float>();
+            foreach (var kv in map)
+            {
+                int index = Mathf.Max(0, kv.Key);
+                if (index == deletedPageIndex)
+                    continue;
+
+                int newIndex = index > deletedPageIndex ? index - 1 : index;
+                float value = kv.Value;
+                if (dropZeroValues && value <= 0f)
+                    continue;
+                if (!dropZeroValues && Mathf.Abs(value) <= 0f)
+                    continue;
+
+                remapped[newIndex] = value;
+            }
+
+            bool changed = remapped.Count != map.Count;
+            if (!changed)
+            {
+                foreach (var kv in remapped)
+                {
+                    if (!map.TryGetValue(kv.Key, out var oldValue) || !Mathf.Approximately(oldValue, kv.Value))
+                    {
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!changed)
+                return false;
+
+            map.Clear();
+            foreach (var kv in remapped)
+                map[kv.Key] = kv.Value;
+            return true;
         }
 
         private static void ResetPageName(int pageIndex)
@@ -1010,6 +1781,14 @@ namespace NoMorePain.Editor
             _dragInsertIndex = -1;
             _dragMousePos = default;
             _dragArrowDirection = 0;
+            ClearScrollbarDrag();
+        }
+
+        private static void ClearScrollbarDrag()
+        {
+            _isScrollbarDrag = false;
+            _scrollbarDragPage = -1;
+            _scrollbarDragGrabOffsetY = 0f;
         }
 
         private static void UpdatePagerRects(Rect panelRect)
@@ -1029,6 +1808,10 @@ namespace NoMorePain.Editor
             bool canPrev = _page > 0;
             bool canNext = _page < pageCount - 1;
             bool isEditingThisPage = _isEditingPageName && _editingPageIndex == _page;
+            bool prevInteractive = isEditingThisPage || canPrev;
+            bool nextInteractive = isEditingThisPage || canNext;
+            bool prevHover = prevInteractive && prevRect.Contains(evt.mousePosition);
+            bool nextHover = nextInteractive && nextRect.Contains(evt.mousePosition);
 
             if (_isEditingPageName && _editingPageIndex >= pageCount)
                 EndPageNameEdit();
@@ -1038,13 +1821,6 @@ namespace NoMorePain.Editor
                 EnsurePagerPillTexture();
                 if (_pagerPillTexture != null)
                     GUI.DrawTexture(pagerRect, _pagerPillTexture, ScaleMode.StretchToFill, true);
-
-                bool prevHover = canPrev && prevRect.Contains(evt.mousePosition);
-                bool nextHover = canNext && nextRect.Contains(evt.mousePosition);
-                if (prevHover)
-                    EditorGUI.DrawRect(prevRect, new Color(1f, 1f, 1f, EditorGUIUtility.isProSkin ? 0.10f : 0.14f));
-                if (nextHover)
-                    EditorGUI.DrawRect(nextRect, new Color(1f, 1f, 1f, EditorGUIUtility.isProSkin ? 0.10f : 0.14f));
             }
 
             if (evt.type == EventType.MouseDown && evt.button == 0 && evt.clickCount >= 2 && labelRect.Contains(evt.mousePosition))
@@ -1064,25 +1840,41 @@ namespace NoMorePain.Editor
             if (_isEditingPageName &&
                 evt.type == EventType.MouseDown &&
                 evt.button == 0 &&
-                !labelRect.Contains(evt.mousePosition))
+                !labelRect.Contains(evt.mousePosition) &&
+                !prevRect.Contains(evt.mousePosition) &&
+                !nextRect.Contains(evt.mousePosition))
             {
                 CommitPageNameEdit();
             }
 
-            if (evt.type == EventType.MouseDown && evt.button == 0 && prevRect.Contains(evt.mousePosition) && canPrev)
+            if (evt.type == EventType.MouseDown && evt.button == 0 && prevRect.Contains(evt.mousePosition))
             {
-                _page = Mathf.Max(0, _page - 1);
-                if (_isEditingPageName && _editingPageIndex != _page)
+                if (isEditingThisPage)
+                {
                     EndPageNameEdit();
+                }
+                else if (canPrev)
+                {
+                    _page = Mathf.Max(0, _page - 1);
+                    if (_isEditingPageName && _editingPageIndex != _page)
+                        EndPageNameEdit();
+                }
                 EditorApplication.RepaintProjectWindow();
                 evt.Use();
             }
 
-            if (evt.type == EventType.MouseDown && evt.button == 0 && nextRect.Contains(evt.mousePosition) && canNext)
+            if (evt.type == EventType.MouseDown && evt.button == 0 && nextRect.Contains(evt.mousePosition))
             {
-                _page = Mathf.Min(pageCount - 1, _page + 1);
-                if (_isEditingPageName && _editingPageIndex != _page)
-                    EndPageNameEdit();
+                if (isEditingThisPage)
+                {
+                    CommitPageNameEdit();
+                }
+                else if (canNext)
+                {
+                    _page = Mathf.Min(pageCount - 1, _page + 1);
+                    if (_isEditingPageName && _editingPageIndex != _page)
+                        EndPageNameEdit();
+                }
                 EditorApplication.RepaintProjectWindow();
                 evt.Use();
             }
@@ -1111,25 +1903,21 @@ namespace NoMorePain.Editor
             }
             else
             {
-                GUI.Label(labelRect, GetPageTitle(_page), _pageStyle);
+                bool labelHover = labelRect.Contains(evt.mousePosition);
+                GUI.Label(labelRect, GetPageTitle(_page), labelHover ? _pageHoverStyle : _pageStyle);
             }
 
-            GUI.Label(prevRect, "<", canPrev ? _pageArrowStyle : _pageArrowDisabledStyle);
-            GUI.Label(nextRect, ">", canNext ? _pageArrowStyle : _pageArrowDisabledStyle);
+            string prevGlyph = isEditingThisPage ? "✕" : "<";
+            string nextGlyph = isEditingThisPage ? "✓" : ">";
+            GUI.Label(prevRect, prevGlyph, prevInteractive ? (prevHover ? _pageArrowHoverStyle : _pageArrowStyle) : _pageArrowDisabledStyle);
+            GUI.Label(nextRect, nextGlyph, nextInteractive ? (nextHover ? _pageArrowHoverStyle : _pageArrowStyle) : _pageArrowDisabledStyle);
 
-            DrawRowHeightSlider(panelRect);
         }
 
-        private static void DrawRowHeightSlider(Rect panelRect)
+        private static void DrawRowHeightSlider(Rect sliderRect)
         {
-            if (panelRect.width < 210f)
+            if (sliderRect.width <= 0f || sliderRect.height <= 0f)
                 return;
-
-            var sliderRect = new Rect(
-                panelRect.xMax - RowHeightSliderWidth - 8f,
-                panelRect.yMax - FooterHeight + 8f,
-                RowHeightSliderWidth,
-                14f);
 
             float previous = _rowHeightSlider;
             _rowHeightSlider = GUI.HorizontalSlider(sliderRect, _rowHeightSlider, 0f, 1f);
@@ -1769,11 +2557,193 @@ namespace NoMorePain.Editor
             if (!TryResolveObject(item, out var obj) || obj == null)
                 return;
 
-            if (EditorUtility.IsPersistent(obj))
+            bool isPersistent = EditorUtility.IsPersistent(obj);
+            if (isPersistent)
                 EditorUtility.FocusProjectWindow();
 
             Selection.activeObject = obj;
+
+            bool favoritesOverlayActive = NMPSettings.ProjectFavoritesOverlay && (_wasAltPressed || _isEditingPageName);
+            if (favoritesOverlayActive && isPersistent)
+            {
+                // Frame in Project window and draw our own right-pane-only ping highlight.
+                if (TryFrameInProjectBrowser(obj))
+                {
+                    StartRightPanePing(obj);
+                    _overlay?.MarkDirtyRepaint();
+                    _projectWindow?.Repaint();
+                    return;
+                }
+
+                // Fallback: focus/frame in project and still trigger right-only highlight.
+                ProjectWindowUtil.ShowCreatedAsset(obj);
+                StartRightPanePing(obj);
+                _overlay?.MarkDirtyRepaint();
+                _projectWindow?.Repaint();
+                return;
+            }
+
             EditorGUIUtility.PingObject(obj);
+        }
+
+        private static bool TryFrameInProjectBrowser(UnityEngine.Object obj)
+        {
+            if (obj == null)
+                return false;
+
+            try
+            {
+                var projectBrowserType = typeof(EditorWindow).Assembly.GetType("UnityEditor.ProjectBrowser");
+                if (projectBrowserType == null)
+                    return false;
+
+                if (_projectBrowserFrameObjectMethod == null || _projectBrowserFrameObjectMethod.DeclaringType != projectBrowserType)
+                {
+                    _projectBrowserFrameObjectMethod =
+                        projectBrowserType.GetMethod(
+                            "FrameObjectInProjectWindow",
+                            ProjectBrowserBindingFlags,
+                            null,
+                            new[] { typeof(int), typeof(bool) },
+                            null)
+                        ?? projectBrowserType.GetMethod(
+                            "FrameObjectInProjectWindow",
+                            ProjectBrowserBindingFlags,
+                            null,
+                            new[] { typeof(int) },
+                            null);
+                }
+
+                if (_projectBrowserFrameObjectMethod == null)
+                    return false;
+
+                int instanceId = obj.GetInstanceID();
+                var parameters = _projectBrowserFrameObjectMethod.GetParameters();
+                if (parameters.Length == 2)
+                    _projectBrowserFrameObjectMethod.Invoke(null, new object[] { instanceId, true });
+                else
+                    _projectBrowserFrameObjectMethod.Invoke(null, new object[] { instanceId });
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void StartRightPanePing(UnityEngine.Object obj)
+        {
+            if (obj == null)
+                return;
+
+            string path = AssetDatabase.GetAssetPath(obj);
+            if (string.IsNullOrEmpty(path))
+                return;
+
+            string guid = AssetDatabase.AssetPathToGUID(path);
+            if (string.IsNullOrEmpty(guid))
+                return;
+
+            _rightPanePingGuid = guid;
+            _rightPanePingUntil = EditorApplication.timeSinceStartup + 1.15d;
+            EditorApplication.RepaintProjectWindow();
+        }
+
+        private static void DrawRightPanePingHighlight(string guid, Rect selectionRect, bool isLeftTreePaneRow, Event evt)
+        {
+            if (evt.type != EventType.Repaint)
+                return;
+            if (string.IsNullOrEmpty(_rightPanePingGuid) || string.IsNullOrEmpty(guid))
+                return;
+            if (EditorApplication.timeSinceStartup > _rightPanePingUntil)
+            {
+                _rightPanePingGuid = null;
+                _rightPanePingUntil = 0d;
+                return;
+            }
+            if (isLeftTreePaneRow)
+                return;
+            if (!string.Equals(_rightPanePingGuid, guid, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            float t = (float)Mathf.Clamp01((float)((_rightPanePingUntil - EditorApplication.timeSinceStartup) / 1.15d));
+            float pulse = 0.45f + 0.55f * Mathf.Sin((1f - t) * Mathf.PI * 3.2f);
+            float alpha = Mathf.Lerp(0.15f, 0.45f, pulse);
+            Color border = new Color(1f, 0.87f, 0.25f, alpha);
+            DrawRoundedRectOutline(selectionRect, border, 3.5f, 4f);
+            EditorApplication.RepaintProjectWindow();
+        }
+
+        private static void DrawRectOutline(Rect rect, Color color, float thickness)
+        {
+            if (rect.width <= 0f || rect.height <= 0f || thickness <= 0f)
+                return;
+
+            float t = Mathf.Min(thickness, Mathf.Min(rect.width, rect.height) * 0.5f);
+            EditorGUI.DrawRect(new Rect(rect.xMin, rect.yMin, rect.width, t), color);
+            EditorGUI.DrawRect(new Rect(rect.xMin, rect.yMax - t, rect.width, t), color);
+            EditorGUI.DrawRect(new Rect(rect.xMin, rect.yMin + t, t, Mathf.Max(0f, rect.height - 2f * t)), color);
+            EditorGUI.DrawRect(new Rect(rect.xMax - t, rect.yMin + t, t, Mathf.Max(0f, rect.height - 2f * t)), color);
+        }
+
+        private static void DrawRoundedRectOutline(Rect rect, Color color, float thickness, float radius)
+        {
+            if (rect.width <= 0f || rect.height <= 0f || thickness <= 0f)
+                return;
+
+            // Keep AA stroke fully inside the item rect to avoid corner bleed artifacts.
+            float half = Mathf.Max(0.5f, thickness * 0.5f);
+            rect = new Rect(
+                rect.x + half,
+                rect.y + half,
+                Mathf.Max(1f, rect.width - thickness),
+                Mathf.Max(1f, rect.height - thickness));
+
+            float r = Mathf.Clamp(radius, 0f, Mathf.Min(rect.width, rect.height) * 0.5f);
+            if (r <= 0.01f)
+            {
+                DrawRectOutline(rect, color, thickness);
+                return;
+            }
+
+            int arcSegments = Mathf.Clamp(Mathf.CeilToInt(r * 0.8f), 4, 12);
+            var points = new List<Vector3>(arcSegments * 4 + 12);
+
+            Vector2 tl = new Vector2(rect.xMin + r, rect.yMin + r);
+            Vector2 tr = new Vector2(rect.xMax - r, rect.yMin + r);
+            Vector2 br = new Vector2(rect.xMax - r, rect.yMax - r);
+            Vector2 bl = new Vector2(rect.xMin + r, rect.yMax - r);
+
+            points.Add(new Vector3(rect.xMin + r, rect.yMin, 0f));
+            points.Add(new Vector3(rect.xMax - r, rect.yMin, 0f));
+            AppendArc(points, tr, r, -90f, 0f, arcSegments, includeStart: false);
+            points.Add(new Vector3(rect.xMax, rect.yMax - r, 0f));
+            AppendArc(points, br, r, 0f, 90f, arcSegments, includeStart: false);
+            points.Add(new Vector3(rect.xMin + r, rect.yMax, 0f));
+            AppendArc(points, bl, r, 90f, 180f, arcSegments, includeStart: false);
+            points.Add(new Vector3(rect.xMin, rect.yMin + r, 0f));
+            AppendArc(points, tl, r, 180f, 270f, arcSegments, includeStart: false);
+
+            var previousColor = Handles.color;
+            Handles.color = color;
+            Handles.DrawAAPolyLine(thickness, points.ToArray());
+            Handles.color = previousColor;
+        }
+
+        private static void AppendArc(List<Vector3> points, Vector2 center, float radius, float startDeg, float endDeg, int segments, bool includeStart)
+        {
+            int startIndex = includeStart ? 0 : 1;
+            for (int i = startIndex; i <= segments; i++)
+            {
+                float t = segments <= 0 ? 1f : (float)i / segments;
+                float angleDeg = Mathf.Lerp(startDeg, endDeg, t);
+                float angleRad = angleDeg * Mathf.Deg2Rad;
+                points.Add(new Vector3(
+                    center.x + Mathf.Cos(angleRad) * radius,
+                    center.y + Mathf.Sin(angleRad) * radius,
+                    0f));
+            }
         }
 
         private static bool TryResolveObject(FavoriteItem item, out UnityEngine.Object obj)
@@ -1972,6 +2942,10 @@ namespace NoMorePain.Editor
             Favorites.Clear();
             FavoritePages.Clear();
             PageNames.Clear();
+            PageScrollStarts.Clear();
+            PageScrollVisualStarts.Clear();
+            PageScrollVelocities.Clear();
+            _lastScrollAnimationTime = -1d;
             _page = 0;
             _manualMinPageCount = 1;
             EndPageNameEdit();
@@ -2065,6 +3039,14 @@ namespace NoMorePain.Editor
                     : new Color(0.10f, 0.10f, 0.10f, 0.95f);
             }
 
+            if (_pageHoverStyle == null)
+            {
+                _pageHoverStyle = new GUIStyle(_pageStyle);
+                _pageHoverStyle.normal.textColor = EditorGUIUtility.isProSkin
+                    ? new Color(0.98f, 0.98f, 0.98f, 1f)
+                    : new Color(0.98f, 0.98f, 0.98f, 1f);
+            }
+
             if (_pageEditStyle == null)
             {
                 _pageEditStyle = new GUIStyle(EditorStyles.textField)
@@ -2091,6 +3073,14 @@ namespace NoMorePain.Editor
                 _pageArrowStyle.normal.textColor = EditorGUIUtility.isProSkin
                     ? new Color(0.90f, 0.90f, 0.90f, 0.98f)
                     : new Color(0.10f, 0.10f, 0.10f, 0.98f);
+            }
+
+            if (_pageArrowHoverStyle == null)
+            {
+                _pageArrowHoverStyle = new GUIStyle(_pageArrowStyle);
+                _pageArrowHoverStyle.normal.textColor = EditorGUIUtility.isProSkin
+                    ? new Color(0.99f, 0.99f, 0.99f, 1f)
+                    : new Color(0.98f, 0.98f, 0.98f, 1f);
             }
 
             if (_pageArrowDisabledStyle == null)
