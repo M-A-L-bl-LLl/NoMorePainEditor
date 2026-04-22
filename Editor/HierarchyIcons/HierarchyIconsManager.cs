@@ -556,11 +556,10 @@ namespace NoMorePain.Editor
                 return 1226;
             if (fullName == "UnityEngine.UI.Button")
                 return 1220;
+            if (name == "CanvasGroup")
+                return 1215;
             if (fullName == "UnityEngine.UI.Image" || fullName == "UnityEngine.UI.RawImage")
                 return 1210;
-
-            if (name == "CanvasGroup")
-                return 1200;
 
             if (comp is Camera) return 1150;
             if (comp is Light) return 1140;
