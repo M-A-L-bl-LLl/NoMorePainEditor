@@ -55,15 +55,8 @@ namespace NoMorePain.Editor
             Texture icon = EditorGUIUtility.GetIconForObject(go);
             if (icon != null) return icon;
 
-            var collider = go.GetComponent<Collider>();
-            if (collider != null) { icon = ResolveComponentIcon(collider); if (icon != null) return icon; }
-
-            foreach (var comp in go.GetComponents<Component>())
-            {
-                if (comp == null || comp is Transform) continue;
-                icon = ResolveComponentIcon(comp);
-                if (icon != null) return icon;
-            }
+            icon = ResolvePrimaryComponentIcon(go.GetComponents<Component>());
+            if (icon != null) return icon;
 
             return null;
         }
@@ -212,14 +205,10 @@ namespace NoMorePain.Editor
                 var components = go.GetComponents<Component>();
                 var right      = new List<RightIcon>(components.Length);
 
-                // Priority: custom icon → collider icon → first component icon
+                // Priority: custom icon → highest-priority component icon
                 Texture primary = EditorGUIUtility.GetIconForObject(go);
-
                 if (primary == null)
-                {
-                    var collider = go.GetComponent<Collider>();
-                    if (collider != null) primary = ResolveComponentIcon(collider);
-                }
+                    primary = ResolvePrimaryComponentIcon(components);
 
                 foreach (var comp in components)
                 {
@@ -496,6 +485,104 @@ namespace NoMorePain.Editor
             if (thumb != null) return thumb;
 
             return EditorGUIUtility.IconContent("cs Script Icon").image;
+        }
+
+        private static Texture ResolvePrimaryComponentIcon(Component[] components)
+        {
+            if (components == null || components.Length == 0)
+                return null;
+
+            Component best = null;
+            int bestScore = int.MinValue;
+
+            for (int i = 0; i < components.Length; i++)
+            {
+                var comp = components[i];
+                if (comp == null || comp is Transform) continue;
+
+                int score = GetPrimaryComponentPriority(comp);
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = comp;
+                }
+            }
+
+            if (best != null)
+            {
+                var bestIcon = ResolveComponentIcon(best);
+                if (bestIcon != null)
+                    return bestIcon;
+            }
+
+            // Last-resort fallback: first component with any icon.
+            for (int i = 0; i < components.Length; i++)
+            {
+                var comp = components[i];
+                if (comp == null || comp is Transform) continue;
+                var icon = ResolveComponentIcon(comp);
+                if (icon != null) return icon;
+            }
+
+            return null;
+        }
+
+        private static int GetPrimaryComponentPriority(Component comp)
+        {
+            var type = comp.GetType();
+            string name = type.Name ?? string.Empty;
+            string fullName = type.FullName ?? name;
+
+            // Explicitly de-prioritize technical helper components.
+            if (name == "CanvasRenderer")
+                return -1000;
+
+            // Text first: this is usually the clearest semantic icon in UI hierarchies.
+            if (fullName == "TMPro.TMP_Text" || fullName == "TMPro.TextMeshProUGUI" || fullName == "TMPro.TextMeshPro")
+                return 1300;
+            if (fullName == "UnityEngine.UI.Text" || name == "Text")
+                return 1250;
+            if (fullName == "TMPro.TMP_InputField" || fullName == "UnityEngine.UI.InputField")
+                return 1240;
+            if (fullName == "TMPro.TMP_Dropdown" || fullName == "UnityEngine.UI.Dropdown")
+                return 1235;
+            if (fullName == "UnityEngine.UI.Toggle")
+                return 1230;
+            if (fullName == "UnityEngine.UI.Slider")
+                return 1228;
+            if (fullName == "UnityEngine.UI.Scrollbar")
+                return 1227;
+            if (fullName == "UnityEngine.UI.ScrollRect")
+                return 1226;
+            if (fullName == "UnityEngine.UI.Button")
+                return 1220;
+            if (fullName == "UnityEngine.UI.Image" || fullName == "UnityEngine.UI.RawImage")
+                return 1210;
+
+            if (name == "CanvasGroup")
+                return 1200;
+
+            if (comp is Camera) return 1150;
+            if (comp is Light) return 1140;
+            if (comp is ParticleSystem) return 1130;
+            if (comp is AudioSource) return 1120;
+            if (comp is SpriteRenderer) return 1110;
+            if (comp is SkinnedMeshRenderer) return 1100;
+            if (comp is Collider2D) return 1095;
+            if (comp is Collider) return 1094;
+            if (comp is MeshRenderer) return 1090;
+            if (comp is MeshFilter) return 1080;
+            if (comp is Canvas) return 1050;
+            if (comp is Animator) return 1040;
+            if (comp is Animation) return 1030;
+            if (comp is LineRenderer) return 1020;
+            if (comp is TrailRenderer) return 1010;
+
+            if (comp is MonoBehaviour) return 900;
+            if (comp is Behaviour) return 800;
+            if (comp is Renderer) return 700;
+
+            return 500;
         }
     }
 }

@@ -1,6 +1,6 @@
 ﻿{
   "name": "com.nomorepain.editor",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "displayName": "No More Pain Editor",
   "description": "Unity Editor productivity tools: Inspector Tabs, Play Mode Save, Component Copy/Paste and more.",
   "unity": "2021.3",
