@@ -123,7 +123,20 @@ namespace NoMorePain.Editor
         {
             if (_hierarchyWindow != null && _hierarchyWindow?.position.width > 0f)
                 return (float)_hierarchyWindow.position.width;
-            return EditorGUIUtility.currentViewWidth;
+
+            if (_overlay != null)
+            {
+                var parent = _overlay.parent;
+                if (parent != null)
+                {
+                    float resolvedWidth = parent.resolvedStyle.width;
+                    if (resolvedWidth > 0f && !float.IsNaN(resolvedWidth) && !float.IsInfinity(resolvedWidth))
+                        return resolvedWidth;
+                }
+            }
+
+            // Safe non-OnGUI fallback (avoid EditorGUIUtility.currentViewWidth here).
+            return 300f;
         }
 
         private static float GetOverlayLeft(float hierarchyWidth)
