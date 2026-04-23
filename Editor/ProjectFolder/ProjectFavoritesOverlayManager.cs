@@ -112,6 +112,8 @@ namespace NoMorePain.Editor
         private static int _dragInsertIndex = -1;
         private static Vector2 _dragMousePos;
         private static int _dragArrowDirection;
+        private static bool _wasOutsideFavoritesDuringCurrentDrag;
+        private static bool _externalDragStartedInCurrentGesture;
         private static bool _isEditingPageName;
         private static int _editingPageIndex = -1;
         private static string _editingPageName = string.Empty;
@@ -125,6 +127,7 @@ namespace NoMorePain.Editor
         private static int _scrollbarDragPage = -1;
         private static float _scrollbarDragGrabOffsetY;
         private static double _lastScrollAnimationTime = -1d;
+        private static Rect _favoritesPanelRect;
 
         private const float PanelMinWidth = 120f;
         private const float HeaderHeight = 24f;
@@ -220,6 +223,20 @@ namespace NoMorePain.Editor
                 _projectWindow = FindProjectWindow();
             if (_projectWindow == null) return;
 
+            if ((_isRowReorderDrag || _pressedRowIndex >= 0) && EditorWindow.mouseOverWindow != _projectWindow)
+            {
+                // Cursor is outside Project window: keep pressed-state alive so reorder
+                // can resume when cursor returns to Favorites, but disable reorder visuals.
+                _isRowReorderDrag = false;
+                _dragInsertIndex = -1;
+                _dragArrowDirection = 0;
+                _wasOutsideFavoritesDuringCurrentDrag = true;
+
+                // Full reset only when overlay is not active anymore.
+                if (!_wasAltPressed && !_isEditingPageName)
+                    ClearReorderState();
+            }
+
             var root = _projectWindow.rootVisualElement;
             if (root == null) return;
 
@@ -270,7 +287,8 @@ namespace NoMorePain.Editor
                     ? Mathf.Clamp(_leftTreeRightXEstimate + 1f, PanelMinWidth, maxOverlayW)
                     : Mathf.Clamp(Mathf.Max(220f, windowW * 0.36f), PanelMinWidth, maxOverlayW);
             }
-            _overlay.style.width = overlayW;
+            bool captureDuringRowDrag = _pressedRowIndex >= 0 || _isRowReorderDrag;
+            _overlay.style.width = captureDuringRowDrag ? windowW : overlayW;
 
             bool overlayActive = _wasAltPressed || _isEditingPageName;
             _overlay.pickingMode = overlayActive ? PickingMode.Position : PickingMode.Ignore;
@@ -327,6 +345,7 @@ namespace NoMorePain.Editor
             Rect panelRect = GetOverlayRect();
             if (panelRect.width < PanelMinWidth || panelRect.height < 96f)
                 return;
+            _favoritesPanelRect = panelRect;
 
             EnsurePageListIntegrity();
             EnsureStyles();
@@ -826,6 +845,14 @@ namespace NoMorePain.Editor
             {
                 if (evt.button == 0)
                 {
+                    if (evt.clickCount >= 2)
+                    {
+                        OpenFavoriteItem(item);
+                        ClearReorderState();
+                        evt.Use();
+                        return;
+                    }
+
                     _pressedRowIndex = itemIndex;
                     _pressedMousePos = evt.mousePosition;
                     _isRowReorderDrag = false;
@@ -835,6 +862,8 @@ namespace NoMorePain.Editor
                         : Mathf.Max(0, _page);
                     _dragInsertIndex = GetSlotInPage(itemIndex, _dragSourcePage);
                     _dragMousePos = evt.mousePosition;
+                    _wasOutsideFavoritesDuringCurrentDrag = false;
+                    _externalDragStartedInCurrentGesture = false;
                     FocusItem(item);
                     evt.Use();
                 }
@@ -919,12 +948,92 @@ namespace NoMorePain.Editor
 
         private static void HandleRowReorder(Rect listRect, float rowHeight, int visibleCount, int visibleStart, float rowOffsetY, Event evt)
         {
-            if (evt.type == EventType.MouseDrag && _pressedRowIndex >= 0)
+            if ((_isRowReorderDrag || _pressedRowIndex >= 0) && evt.type == EventType.MouseLeaveWindow)
+            {
+                // If user leaves the Project window while dragging a row, try promoting
+                // to external Unity drag first (e.g. dropping into Scene/Hierarchy/Inspector).
+                int sourceIndex = _isRowReorderDrag ? _dragSourceIndex : _pressedRowIndex;
+                if (!_externalDragStartedInCurrentGesture &&
+                    sourceIndex >= 0 &&
+                    TryStartExternalAssetDrag(sourceIndex))
+                {
+                    _externalDragStartedInCurrentGesture = true;
+                    _isRowReorderDrag = false;
+                    _dragInsertIndex = -1;
+                    _dragArrowDirection = 0;
+                    _wasOutsideFavoritesDuringCurrentDrag = true;
+                    evt.Use();
+                    return;
+                }
+
+                // Keep press-state so user can return cursor into Favorites
+                // and continue reorder if external drag wasn't started.
+                _isRowReorderDrag = false;
+                _dragInsertIndex = -1;
+                _dragArrowDirection = 0;
+                _wasOutsideFavoritesDuringCurrentDrag = true;
+                EditorApplication.RepaintProjectWindow();
+                evt.Use();
+                return;
+            }
+
+            if ((evt.type == EventType.MouseDrag || evt.type == EventType.DragUpdated) && _pressedRowIndex >= 0)
             {
                 _dragMousePos = evt.mousePosition;
+                bool dragPastThreshold = HasDragExceededStartThreshold(evt.mousePosition);
+                bool isOutsideFavorites = IsOutsideFavoritesForDragStart(evt.mousePosition);
+                int sourceIndex = _dragSourceIndex >= 0 ? _dragSourceIndex : _pressedRowIndex;
+
+                if (!isOutsideFavorites && _externalDragStartedInCurrentGesture)
+                {
+                    // User returned back into Favorites while still holding drag:
+                    // cancel external payload and continue local reorder.
+                    CancelExternalDragPayload();
+                    _externalDragStartedInCurrentGesture = false;
+                    _wasOutsideFavoritesDuringCurrentDrag = true;
+                }
+
+                if (isOutsideFavorites)
+                {
+                    // Outside Favorites: disable reorder mode.
+                    _isRowReorderDrag = false;
+                    _dragInsertIndex = -1;
+                    _wasOutsideFavoritesDuringCurrentDrag = true;
+
+                    // Start external drag when cursor reaches Project outer edge and moves outward.
+                    // This lets us start drag before IMGUI events are lost on fast cursor exit.
+                    if (!_externalDragStartedInCurrentGesture &&
+                        sourceIndex >= 0 &&
+                        dragPastThreshold &&
+                        (IsOutsideProjectWindowBounds(evt.mousePosition) ||
+                         IsAtProjectWindowEdgeMovingOutward(evt.mousePosition, evt.delta)) &&
+                        TryStartExternalAssetDrag(sourceIndex))
+                    {
+                        _externalDragStartedInCurrentGesture = true;
+                        evt.Use();
+                        return;
+                    }
+
+                    EditorApplication.RepaintProjectWindow();
+                    evt.Use();
+                    return;
+                }
+
+                if (_wasOutsideFavoritesDuringCurrentDrag && !_isRowReorderDrag)
+                {
+                    // Cursor returned into Favorites: re-enable reorder mode for this drag.
+                    _isRowReorderDrag = true;
+                    _dragSourceIndex = Mathf.Clamp(_pressedRowIndex, 0, Mathf.Max(0, Favorites.Count - 1));
+                    _dragSourcePage = _dragSourceIndex >= 0 && _dragSourceIndex < FavoritePages.Count
+                        ? Mathf.Max(0, FavoritePages[_dragSourceIndex])
+                        : Mathf.Max(0, _page);
+                    _wasOutsideFavoritesDuringCurrentDrag = false;
+                    _externalDragStartedInCurrentGesture = false;
+                }
+
                 if (!_isRowReorderDrag)
                 {
-                    if ((evt.mousePosition - _pressedMousePos).sqrMagnitude >= ReorderDragStartDistance * ReorderDragStartDistance)
+                    if (dragPastThreshold)
                     {
                         _isRowReorderDrag = true;
                         _dragSourceIndex = Mathf.Clamp(_pressedRowIndex, 0, Mathf.Max(0, Favorites.Count - 1));
@@ -955,7 +1064,8 @@ namespace NoMorePain.Editor
 
             if (evt.type == EventType.MouseUp && evt.button == 0)
             {
-                bool hadReorderDrag = _isRowReorderDrag;
+                bool releasedOutsideFavorites = IsOutsideFavoritesStrict(evt.mousePosition);
+                bool hadReorderDrag = _isRowReorderDrag && !releasedOutsideFavorites;
                 bool didReorder = false;
                 bool didCompact = false;
                 if (hadReorderDrag && _dragSourceIndex >= 0 && _dragSourceIndex < Favorites.Count)
@@ -974,12 +1084,172 @@ namespace NoMorePain.Editor
                 }
 
                 ClearReorderState();
-                if (didReorder || didCompact)
+                if (didReorder || didCompact || releasedOutsideFavorites)
                     evt.Use();
+            }
+
+            if ((_isRowReorderDrag || _pressedRowIndex >= 0) && evt.type == EventType.DragExited)
+            {
+                int sourceIndex = _dragSourceIndex >= 0 ? _dragSourceIndex : _pressedRowIndex;
+                if (!_externalDragStartedInCurrentGesture &&
+                    sourceIndex >= 0 &&
+                    TryStartExternalAssetDrag(sourceIndex))
+                {
+                    _externalDragStartedInCurrentGesture = true;
+                    _isRowReorderDrag = false;
+                    _dragInsertIndex = -1;
+                    _dragArrowDirection = 0;
+                    _wasOutsideFavoritesDuringCurrentDrag = true;
+                    evt.Use();
+                    return;
+                }
+
+                // Don't fully reset press-state here: user may move cursor back into Favorites
+                // and continue reorder in the same drag gesture.
+                _isRowReorderDrag = false;
+                _dragInsertIndex = -1;
+                _dragArrowDirection = 0;
+                _wasOutsideFavoritesDuringCurrentDrag = true;
+                EditorApplication.RepaintProjectWindow();
+                evt.Use();
+                return;
             }
 
             if (evt.type == EventType.KeyDown && evt.keyCode == KeyCode.Escape)
                 ClearReorderState();
+        }
+
+        private static bool IsOutsideFavoritesForDragStart(Vector2 mousePosition)
+        {
+            // Use a small inward margin so external drag can start reliably
+            // even on fast cursor movement near Favorites border.
+            const float edgeMargin = 12f;
+            return IsOutsideFavorites(mousePosition, edgeMargin);
+        }
+
+        private static bool IsOutsideFavoritesStrict(Vector2 mousePosition)
+        {
+            // Strict geometry check used for mouse-up commit logic.
+            return IsOutsideFavorites(mousePosition, 0f);
+        }
+
+        private static bool IsOutsideFavorites(Vector2 mousePosition, float inwardMargin)
+        {
+            if (_favoritesPanelRect.width <= 0f || _favoritesPanelRect.height <= 0f)
+                return false;
+
+            float xMin = _favoritesPanelRect.xMin + Mathf.Max(0f, inwardMargin);
+            float xMax = _favoritesPanelRect.xMax - Mathf.Max(0f, inwardMargin);
+            float yMin = _favoritesPanelRect.yMin + Mathf.Max(0f, inwardMargin);
+            float yMax = _favoritesPanelRect.yMax - Mathf.Max(0f, inwardMargin);
+
+            if (xMax <= xMin || yMax <= yMin)
+                return true;
+
+            return mousePosition.x <= xMin ||
+                   mousePosition.x >= xMax ||
+                   mousePosition.y <= yMin ||
+                   mousePosition.y >= yMax;
+        }
+
+        private static bool IsOutsideProjectWindowBounds(Vector2 mousePosition)
+        {
+            float width = 0f;
+            float height = 0f;
+
+            if (_overlay != null)
+            {
+                width = _overlay.contentRect.width;
+                height = _overlay.contentRect.height;
+            }
+
+            if ((width <= 0.1f || height <= 0.1f) && _projectWindow != null)
+            {
+                width = Mathf.Max(width, _projectWindow.position.width);
+                height = Mathf.Max(height, _projectWindow.position.height);
+            }
+
+            if (width <= 0.1f || height <= 0.1f)
+                return false;
+
+            return mousePosition.x < 0f ||
+                   mousePosition.x > width ||
+                   mousePosition.y < 0f ||
+                   mousePosition.y > height;
+        }
+
+        private static bool IsAtProjectWindowEdgeMovingOutward(Vector2 mousePosition, Vector2 delta)
+        {
+            float width = 0f;
+            float height = 0f;
+
+            if (_overlay != null)
+            {
+                width = _overlay.contentRect.width;
+                height = _overlay.contentRect.height;
+            }
+
+            if ((width <= 0.1f || height <= 0.1f) && _projectWindow != null)
+            {
+                width = Mathf.Max(width, _projectWindow.position.width);
+                height = Mathf.Max(height, _projectWindow.position.height);
+            }
+
+            if (width <= 0.1f || height <= 0.1f)
+                return false;
+
+            const float edgeThreshold = 16f;
+            bool nearLeft = mousePosition.x <= edgeThreshold && delta.x < -0.01f;
+            bool nearRight = mousePosition.x >= width - edgeThreshold && delta.x > 0.01f;
+            bool nearTop = mousePosition.y <= edgeThreshold && delta.y < -0.01f;
+            bool nearBottom = mousePosition.y >= height - edgeThreshold && delta.y > 0.01f;
+            return nearLeft || nearRight || nearTop || nearBottom;
+        }
+
+        private static bool HasDragExceededStartThreshold(Vector2 mousePosition)
+        {
+            Vector2 delta = mousePosition - _pressedMousePos;
+            return delta.sqrMagnitude >= ReorderDragStartDistance * ReorderDragStartDistance;
+        }
+
+        private static bool TryStartExternalAssetDrag(int sourceIndex)
+        {
+            if (sourceIndex < 0 || sourceIndex >= Favorites.Count)
+                return false;
+
+            var item = Favorites[sourceIndex];
+            string path = TryResolveAssetPath(item);
+            if (string.IsNullOrEmpty(path))
+                return false;
+            if (AssetDatabase.IsValidFolder(path))
+                return false;
+
+            var obj = AssetDatabase.LoadMainAssetAtPath(path);
+            if (obj == null)
+                return false;
+
+            DragAndDrop.PrepareStartDrag();
+            DragAndDrop.objectReferences = new[] { obj };
+            DragAndDrop.paths = new[] { path };
+            DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+            try
+            {
+                DragAndDrop.StartDrag(GetDisplayName(item));
+                return true;
+            }
+            catch
+            {
+                CancelExternalDragPayload();
+                return false;
+            }
+        }
+
+        private static void CancelExternalDragPayload()
+        {
+            DragAndDrop.PrepareStartDrag();
+            DragAndDrop.objectReferences = Array.Empty<UnityEngine.Object>();
+            DragAndDrop.paths = Array.Empty<string>();
+            DragAndDrop.visualMode = DragAndDropVisualMode.None;
         }
 
         private static bool TryHandleCrossPageDragOnPager(Vector2 mousePosition)
@@ -1798,6 +2068,8 @@ namespace NoMorePain.Editor
             _dragInsertIndex = -1;
             _dragMousePos = default;
             _dragArrowDirection = 0;
+            _wasOutsideFavoritesDuringCurrentDrag = false;
+            _externalDragStartedInCurrentGesture = false;
             ClearScrollbarDrag();
         }
 
@@ -1950,6 +2222,8 @@ namespace NoMorePain.Editor
         private static void HandleDragAndDrop(Rect panelRect, Event evt)
         {
             if (evt.type != EventType.DragUpdated && evt.type != EventType.DragPerform)
+                return;
+            if (_pressedRowIndex >= 0 || _isRowReorderDrag || _externalDragStartedInCurrentGesture)
                 return;
             if (!panelRect.Contains(evt.mousePosition))
                 return;
@@ -2601,6 +2875,23 @@ namespace NoMorePain.Editor
             }
 
             EditorGUIUtility.PingObject(obj);
+        }
+
+        private static void OpenFavoriteItem(FavoriteItem item)
+        {
+            if (!TryResolveObject(item, out var obj) || obj == null)
+                return;
+
+            string path = TryResolveAssetPath(item);
+            if (!string.IsNullOrEmpty(path) && AssetDatabase.IsValidFolder(path))
+            {
+                FocusItem(item);
+                return;
+            }
+
+            FocusItem(item);
+            if (!AssetDatabase.OpenAsset(obj))
+                EditorGUIUtility.PingObject(obj);
         }
 
         private static bool TryFrameInProjectBrowser(UnityEngine.Object obj)
