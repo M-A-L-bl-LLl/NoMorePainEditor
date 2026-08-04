@@ -110,6 +110,7 @@ namespace NoMorePain.Editor
         private static int _dragSourceIndex = -1;
         private static int _dragSourcePage = -1;
         private static int _dragInsertIndex = -1;
+        private static int _rowDragControlId;
         private static Vector2 _dragMousePos;
         private static int _dragArrowDirection;
         private static bool _wasOutsideFavoritesDuringCurrentDrag;
@@ -145,6 +146,7 @@ namespace NoMorePain.Editor
         private const float ReorderAutoScrollRowsPerSecondMax = 4.2f;
         private const string RowHeightSliderPrefKey = "NoMorePain.ProjectFavoritesOverlay.RowHeightSlider";
         private const float ReorderDragStartDistance = 4f;
+        private const string FavoriteDragDataKey = "NoMorePain.ProjectFavoritesOverlay.FavoriteKey";
         private const string PageNameFieldControlName = "NMP_Favorites_PageName";
 
         private static float CurrentRowHeight => Mathf.Lerp(BaseRowHeight, MaxRowHeight, _rowHeightSlider);
@@ -853,6 +855,8 @@ namespace NoMorePain.Editor
                         return;
                     }
 
+                    _rowDragControlId = GUIUtility.GetControlID(FocusType.Passive);
+                    GUIUtility.hotControl = _rowDragControlId;
                     _pressedRowIndex = itemIndex;
                     _pressedMousePos = evt.mousePosition;
                     _isRowReorderDrag = false;
@@ -973,6 +977,39 @@ namespace NoMorePain.Editor
                 _dragArrowDirection = 0;
                 _wasOutsideFavoritesDuringCurrentDrag = true;
                 EditorApplication.RepaintProjectWindow();
+                evt.Use();
+                return;
+            }
+
+            if ((evt.type == EventType.DragUpdated || evt.type == EventType.DragPerform) &&
+                TryGetFavoriteDragSourceIndex(out int favoriteDragSourceIndex))
+            {
+                _pressedRowIndex = favoriteDragSourceIndex;
+                _dragSourceIndex = favoriteDragSourceIndex;
+                _dragSourcePage = favoriteDragSourceIndex < FavoritePages.Count
+                    ? Mathf.Max(0, FavoritePages[favoriteDragSourceIndex])
+                    : Mathf.Max(0, _page);
+                _dragMousePos = evt.mousePosition;
+                _isRowReorderDrag = true;
+                _wasOutsideFavoritesDuringCurrentDrag = false;
+
+                if (!TryHandleCrossPageDragOnPager(evt.mousePosition))
+                {
+                    int localInsert = GetInsertSlotFromMouseY(listRect, rowHeight, visibleCount, evt.mousePosition.y, rowOffsetY);
+                    _dragInsertIndex = visibleStart + localInsert;
+                }
+
+                DragAndDrop.visualMode = DragAndDropVisualMode.Move;
+                EditorApplication.RepaintProjectWindow();
+
+                if (evt.type == EventType.DragPerform)
+                {
+                    DragAndDrop.AcceptDrag();
+                    DragAndDrop.SetGenericData(FavoriteDragDataKey, null);
+                    _externalDragStartedInCurrentGesture = false;
+                    CompleteRowReorder();
+                }
+
                 evt.Use();
                 return;
             }
@@ -1119,6 +1156,30 @@ namespace NoMorePain.Editor
                 ClearReorderState();
         }
 
+        private static bool CompleteRowReorder()
+        {
+            bool hadReorderDrag = _isRowReorderDrag;
+            bool didReorder = false;
+            bool didCompact = false;
+            if (hadReorderDrag && _dragSourceIndex >= 0 && _dragSourceIndex < Favorites.Count)
+            {
+                int targetPage = Mathf.Max(0, _page);
+                int insert = Mathf.Clamp(_dragInsertIndex, 0, GetPageItemCount(targetPage));
+                didReorder = MoveFavoriteItem(_dragSourceIndex, targetPage, insert);
+            }
+
+            if (hadReorderDrag)
+                didCompact = CompactPageLayout();
+            if (didReorder || didCompact)
+            {
+                SaveData();
+                EditorApplication.RepaintProjectWindow();
+            }
+
+            ClearReorderState();
+            return didReorder || didCompact;
+        }
+
         private static bool IsOutsideFavoritesForDragStart(Vector2 mousePosition)
         {
             // Use a small inward margin so external drag can start reliably
@@ -1228,10 +1289,20 @@ namespace NoMorePain.Editor
             if (obj == null)
                 return false;
 
+            string favoriteKey = BuildKey(item.Guid, item.Path, item.GlobalId);
+            if (string.IsNullOrEmpty(favoriteKey))
+                return false;
+
             DragAndDrop.PrepareStartDrag();
             DragAndDrop.objectReferences = new[] { obj };
             DragAndDrop.paths = new[] { path };
+            DragAndDrop.SetGenericData(FavoriteDragDataKey, favoriteKey);
             DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+
+            if (_rowDragControlId != 0 && GUIUtility.hotControl == _rowDragControlId)
+                GUIUtility.hotControl = 0;
+            _rowDragControlId = 0;
+
             try
             {
                 DragAndDrop.StartDrag(GetDisplayName(item));
@@ -1249,9 +1320,35 @@ namespace NoMorePain.Editor
             DragAndDrop.PrepareStartDrag();
             DragAndDrop.objectReferences = Array.Empty<UnityEngine.Object>();
             DragAndDrop.paths = Array.Empty<string>();
+            DragAndDrop.SetGenericData(FavoriteDragDataKey, null);
             DragAndDrop.visualMode = DragAndDropVisualMode.None;
         }
 
+        private static bool HasFavoriteDragData()
+        {
+            string favoriteKey = DragAndDrop.GetGenericData(FavoriteDragDataKey) as string;
+            return !string.IsNullOrEmpty(favoriteKey);
+        }
+
+        private static bool TryGetFavoriteDragSourceIndex(out int itemIndex)
+        {
+            itemIndex = -1;
+            string favoriteKey = DragAndDrop.GetGenericData(FavoriteDragDataKey) as string;
+            if (string.IsNullOrEmpty(favoriteKey))
+                return false;
+
+            for (int i = 0; i < Favorites.Count; i++)
+            {
+                var item = Favorites[i];
+                if (!string.Equals(BuildKey(item.Guid, item.Path, item.GlobalId), favoriteKey, StringComparison.Ordinal))
+                    continue;
+
+                itemIndex = i;
+                return true;
+            }
+
+            return false;
+        }
         private static bool TryHandleCrossPageDragOnPager(Vector2 mousePosition)
         {
             bool overPrev = _page > 0 && _pagerPrevRect.Contains(mousePosition);
@@ -2061,6 +2158,10 @@ namespace NoMorePain.Editor
 
         private static void ClearReorderState()
         {
+            if (_rowDragControlId != 0 && GUIUtility.hotControl == _rowDragControlId)
+                GUIUtility.hotControl = 0;
+            _rowDragControlId = 0;
+
             _pressedRowIndex = -1;
             _isRowReorderDrag = false;
             _dragSourceIndex = -1;
@@ -2196,8 +2297,8 @@ namespace NoMorePain.Editor
                 GUI.Label(labelRect, GetPageTitle(_page), labelHover ? _pageHoverStyle : _pageStyle);
             }
 
-            string prevGlyph = isEditingThisPage ? "✕" : "<";
-            string nextGlyph = isEditingThisPage ? "✓" : ">";
+            string prevGlyph = isEditingThisPage ? "?" : "<";
+            string nextGlyph = isEditingThisPage ? "?" : ">";
             GUI.Label(prevRect, prevGlyph, prevInteractive ? (prevHover ? _pageArrowHoverStyle : _pageArrowStyle) : _pageArrowDisabledStyle);
             GUI.Label(nextRect, nextGlyph, nextInteractive ? (nextHover ? _pageArrowHoverStyle : _pageArrowStyle) : _pageArrowDisabledStyle);
 
@@ -2222,6 +2323,8 @@ namespace NoMorePain.Editor
         private static void HandleDragAndDrop(Rect panelRect, Event evt)
         {
             if (evt.type != EventType.DragUpdated && evt.type != EventType.DragPerform)
+                return;
+            if (HasFavoriteDragData())
                 return;
             if (_pressedRowIndex >= 0 || _isRowReorderDrag || _externalDragStartedInCurrentGesture)
                 return;

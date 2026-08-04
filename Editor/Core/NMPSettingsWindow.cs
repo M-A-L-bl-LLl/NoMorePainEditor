@@ -10,7 +10,7 @@ namespace NoMorePain.Editor
 
         [MenuItem("Tools/No More Pain/Settings", priority = 1)]
         public static void Open() =>
-            GetWindow<NMPSettingsWindow>(utility: true, title: "No More Pain", focus: true);
+            GetWindow<NMPSettingsWindow>(utility: true, title: "No More Pain Settings", focus: true);
 
         // -- Styles (lazy) --
 
@@ -46,7 +46,7 @@ namespace NoMorePain.Editor
 
         private void OnEnable()
         {
-            minSize = new Vector2(340f, 460f);
+            minSize = new Vector2(370f, 570f);
             maxSize = new Vector2(600f, 600f);
         }
 
@@ -102,6 +102,22 @@ namespace NoMorePain.Editor
             NMPSettings.ComponentCopyPaste = Toggle(NMPSettings.ComponentCopyPaste, "Component Copy/Paste", "Batch copy and paste components between GameObjects");
             if (EditorGUI.EndChangeCheck())
                 RepaintAllInspectors();
+
+            EditorGUILayout.Space(10f);
+
+            // -- Scenes --
+            DrawSectionHeader("SCENES");
+
+            EditorGUI.BeginChangeCheck();
+            NMPSettings.ScenePlayToolbar = Toggle(
+                NMPSettings.ScenePlayToolbar,
+                "Scene Play Toolbar",
+                "Choose, lock, favorite and launch scenes from the main toolbar");
+            if (EditorGUI.EndChangeCheck())
+            {
+                ScenePlayToolbar.RefreshEnabledState();
+                RepaintAllInspectors();
+            }
 
             EditorGUILayout.Space(8f);
         }

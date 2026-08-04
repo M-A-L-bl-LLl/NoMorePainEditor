@@ -10,6 +10,7 @@
 ### 🌟 Быстрый взгляд 🌟
 
 - 🎯 Быстрая навигация по папкам в Hierarchy (Folder Navbar)
+- 🎬 Выбор и запуск сцен рядом с кнопками Play Mode (Scene Toolbar)
 - 🎨 Цветные папки и строки в Project (Folder Colors / Row Colors)
 - ⭐ Панель избранного в Project по зажатому `Alt` (Favorites Overlay)
 - 👀 Hover Preview по `Alt` для объектов с мешем
@@ -98,6 +99,19 @@
 
 Данные сохраняются в `ProjectSettings/NoMorePainProjectFavorites.json`.
 
+#### 🎬 Scene Toolbar — выбор и запуск сцен
+Панель выбора сцен слева от стандартных кнопок Play Mode.
+
+- Нажмите на название сцены, чтобы открыть выпадающее окно под панелью
+- Сцены берутся из активного `Scene List`
+- Обычный клик по сцене открывает её в редакторе
+- Кнопка **⭐** добавляет сцену в избранное; избранные сцены отображаются первыми
+- Перетаскивайте строки, чтобы менять порядок сцен в списке
+- Кнопка замка закрепляет сцену и показывает её сверху списка
+- Отдельная кнопка Play запускает Play Mode именно с закреплённой сцены
+- **ПКМ по сцене в Project → Add To Scene List** — добавить сцену в активный список
+- Функцию можно отключить через `Tools → No More Pain → Settings → Scene Play Toolbar`
+
 #### 📌 Inspector Tabs
 Полоса закреплённых объектов в верхней части Inspector. Табы хранятся отдельно для каждой сцены.  
 - **Add Tab** — закрепить текущий объект  
@@ -170,6 +184,7 @@ https://github.com/M-A-L-bl-LLl/NoMorePainEditor.git
 ### 🌟 Quick Look 🌟
 
 - 🎯 Fast folder navigation in Hierarchy (Folder Navbar)
+- 🎬 Scene selection and launch beside the Play Mode controls (Scene Toolbar)
 - 🎨 Colored folders and rows in Project (Folder Colors / Row Colors)
 - ⭐ Project Favorites panel on `Alt` hold (Favorites Overlay)
 - 👀 `Alt` hover preview for mesh objects
@@ -257,6 +272,19 @@ A favorites panel over the left pane of the Project window: hold **Alt** — the
 - Folders colored via No More Pain reflect their color in the panel: color stripe and row tint
 
 Data is saved to `ProjectSettings/NoMorePainProjectFavorites.json`.
+
+#### 🎬 Scene Toolbar — Scene Selection and Launch
+A scene selector placed to the left of Unity's standard Play Mode controls.
+
+- Click the scene name to open the dropdown directly below the toolbar
+- Scenes are read from the active `Scene List`
+- Click a scene to open it in the Editor
+- Use **⭐** to add a scene to favorites; favorite scenes are shown first
+- Drag rows to reorder scenes in the list
+- Use the lock button to pin a scene and keep it at the top of the list
+- The dedicated Play button enters Play Mode from the locked scene
+- **Right-click a scene in Project → Add To Scene List** to add it to the active list
+- Disable the feature via `Tools → No More Pain → Settings → Scene Play Toolbar`
 
 #### 📌 Inspector Tabs
 Pinned objects strip at the top of Inspector. Tabs are stored per scene.  

@@ -127,6 +127,13 @@ namespace NoMorePain.Editor
             set => Set("Inspector.CopyPaste",      value);
         }
 
+        // -- Scenes --
+        public static bool ScenePlayToolbar
+        {
+            get => Get("Scenes.PlayToolbar",        true);
+            set => Set("Scenes.PlayToolbar",        value);
+        }
+
         // -- Helpers --
         private static bool Get(string key, bool defaultValue) =>
             EditorPrefs.GetBool(Prefix + key, defaultValue);
