@@ -18,17 +18,17 @@ namespace NoMorePain.Editor
     {
         private const float NavH = 22f;
 
-        // ── Folder cache ───────────────────────────────────────────────
+        // -- Folder cache --
 
         private static readonly List<(string name, GameObject go, string globalId)> _folders = new();
         private static bool _dirty = true;
 
-        // ── Overlay ────────────────────────────────────────────────────
+        // -- Overlay --
 
         private static EditorWindow   _hierarchyWindow;
         private static IMGUIContainer _overlay;
 
-        // ── Search state ───────────────────────────────────────────────
+        // -- Search state --
 
         private static bool   _searchMode;
         private static bool   _searchJustOpened;
@@ -36,14 +36,14 @@ namespace NoMorePain.Editor
         private static float  _scrollOffsetX = 0f;
         private static float  _createBtnW    = 0f;
 
-        // ── Reflection cache ───────────────────────────────────────────
+        // -- Reflection cache --
 
         private static MethodInfo _setSearchFilterMethod;
         private static object     _sceneHierarchy;
         private static MethodInfo _expandMethod;
         private static MethodInfo _frameMethod;
 
-        // ── Init ───────────────────────────────────────────────────────
+        // -- Init --
 
         static HierarchyFolderNavbar()
         {
@@ -53,7 +53,7 @@ namespace NoMorePain.Editor
             HierarchyFolderManager.OnFolderDataChanged += () => _dirty = true;
         }
 
-        // ── Overlay management ─────────────────────────────────────────
+        // -- Overlay management --
 
         private static void EnsureOverlay()
         {
@@ -84,7 +84,7 @@ namespace NoMorePain.Editor
             _frameMethod           = null;
             _setSearchFilterMethod = null;
             // EditorStyles throws NullReferenceException (not just returns null) during early
-            // editor init — catch it and defer until styles are fully initialized.
+            // editor init ? catch it and defer until styles are fully initialized.
             try
             {
                 // The hierarchy "Create" button uses the internal toolbarCreateAddNewDropDown style,
@@ -128,17 +128,21 @@ namespace NoMorePain.Editor
 
         private static float GetOverlayLeft(float hierarchyWidth)
         {
-            // On narrow hierarchy widths Unity shifts native search layout to the left.
-            // Add adaptive left shift so our overlay keeps covering it.
-            const float kShiftStartWidth = 430f;
-            const float kShiftRange      = 180f;
-            const float kMaxNarrowShift  = 28f;
-            float t           = Mathf.Clamp01((kShiftStartWidth - hierarchyWidth) / kShiftRange);
-            float narrowShift = t * kMaxNarrowShift;
-            return Mathf.Max(0f, _createBtnW - narrowShift);
+            // Unity replaces the full "Create" control with a compact '+' control when
+            // the Hierarchy becomes narrow. Match that transition so the overlay begins
+            // at the compact control's right edge instead of leaving the search field's
+            // rounded left cap visible without overlapping the compact Create control.
+            const float fullCreateWidthThreshold = 430f;
+            const float compactCreateWidthThreshold = 400f;
+            const float compactCreateRight = 37f;
+            float compactT = Mathf.InverseLerp(
+                fullCreateWidthThreshold,
+                compactCreateWidthThreshold,
+                hierarchyWidth);
+            float compactLeft = Mathf.Min(_createBtnW, compactCreateRight);
+            return Mathf.Max(0f, Mathf.Lerp(_createBtnW, compactLeft, compactT));
         }
-
-        // ── IMGUI ──────────────────────────────────────────────────────
+        // -- IMGUI --
 
         private static void DrawNavbar()
         {
@@ -171,7 +175,7 @@ namespace NoMorePain.Editor
             if (Event.current.type == EventType.Repaint)
                 EditorStyles.toolbar.Draw(full, false, false, false, false);
 
-            // Mask the Unity native search bar — must cover the FULL overlay width.
+            // Mask the Unity native search bar ? must cover the FULL overlay width.
             // On narrow windows the search field may occupy the entire overlay area, so
             // leaving even the loupe-button zone uncovered lets the search bar show through.
             // The loupe button and folder buttons are drawn later, on top of this rect.
@@ -191,7 +195,7 @@ namespace NoMorePain.Editor
             float edgeH = Mathf.Max(0f, Mathf.Round(NavH - edgePadY * 2f));
             EditorGUI.DrawRect(new Rect(leftEdgeOffset, edgeY, edgeW, edgeH), edgeColor);
 
-            // ── Loupe button (always visible, right side) ──────────────
+            // -- Loupe button (always visible, right side) --
             var loupeIcon = _searchMode
                 ? EditorGUIUtility.IconContent(EditorGUIUtility.isProSkin ? "d_clear" : "clear").image
                 : EditorGUIUtility.IconContent(EditorGUIUtility.isProSkin ? "d_Search Icon" : "Search Icon").image;
@@ -210,7 +214,7 @@ namespace NoMorePain.Editor
                 }
             }
 
-            // ── Search mode ────────────────────────────────────────────
+            // -- Search mode --
             // Disable search mode if the window is too narrow to accommodate the field
             if (_searchMode && !canInlineSearch)
             {
@@ -236,7 +240,7 @@ namespace NoMorePain.Editor
                 return;
             }
 
-            // ── Folder buttons (horizontally scrollable) ──────────────
+            // -- Folder buttons (horizontally scrollable) --
             if (_folders.Count == 0) return;
 
             var   style      = new GUIStyle(NMPStyles.ToolbarButton)
@@ -386,7 +390,7 @@ namespace NoMorePain.Editor
             }
         }
 
-        // ── Folder cache ───────────────────────────────────────────────
+        // -- Folder cache --
 
         private static void Refresh()
         {
@@ -403,7 +407,7 @@ namespace NoMorePain.Editor
             _dirty = false;
         }
 
-        // ── Folder expand & frame ──────────────────────────────────────
+        // -- Folder expand & frame --
 
         private static void ExpandAndFrame(GameObject go)
         {
@@ -447,7 +451,7 @@ namespace NoMorePain.Editor
                 null, new[] { typeof(int), typeof(bool) }, null);
         }
 
-        // ── Hierarchy search ───────────────────────────────────────────
+        // -- Hierarchy search --
 
         private static void SetHierarchySearch(string filter)
         {
@@ -460,7 +464,7 @@ namespace NoMorePain.Editor
             {
                 try
                 {
-                    // Parameter 1 is SearchMode enum — get value 0 (All) via its actual type
+                    // Parameter 1 is SearchMode enum ? get value 0 (All) via its actual type
                     var searchModeType = _setSearchFilterMethod.GetParameters()[1].ParameterType;
                     var searchModeAll  = System.Enum.ToObject(searchModeType, 0);
                     _setSearchFilterMethod.Invoke(_hierarchyWindow, new object[] { filter, searchModeAll, true, false });

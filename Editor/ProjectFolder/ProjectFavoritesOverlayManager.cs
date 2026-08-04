@@ -110,6 +110,7 @@ namespace NoMorePain.Editor
         private static int _dragSourceIndex = -1;
         private static int _dragSourcePage = -1;
         private static int _dragInsertIndex = -1;
+        private static int _rowDragControlId;
         private static Vector2 _dragMousePos;
         private static int _dragArrowDirection;
         private static bool _isEditingPageName;
@@ -142,6 +143,7 @@ namespace NoMorePain.Editor
         private const float ReorderAutoScrollRowsPerSecondMax = 4.2f;
         private const string RowHeightSliderPrefKey = "NoMorePain.ProjectFavoritesOverlay.RowHeightSlider";
         private const float ReorderDragStartDistance = 4f;
+        private const string FavoriteDragDataKey = "NoMorePain.ProjectFavoritesOverlay.FavoriteKey";
         private const string PageNameFieldControlName = "NMP_Favorites_PageName";
 
         private static float CurrentRowHeight => Mathf.Lerp(BaseRowHeight, MaxRowHeight, _rowHeightSlider);
@@ -826,6 +828,8 @@ namespace NoMorePain.Editor
             {
                 if (evt.button == 0)
                 {
+                    _rowDragControlId = GUIUtility.GetControlID(FocusType.Passive);
+                    GUIUtility.hotControl = _rowDragControlId;
                     _pressedRowIndex = itemIndex;
                     _pressedMousePos = evt.mousePosition;
                     _isRowReorderDrag = false;
@@ -922,6 +926,12 @@ namespace NoMorePain.Editor
             if (evt.type == EventType.MouseDrag && _pressedRowIndex >= 0)
             {
                 _dragMousePos = evt.mousePosition;
+                if (ShouldStartExternalObjectDrag(evt.mousePosition) && TryStartExternalObjectDrag(_pressedRowIndex))
+                {
+                    evt.Use();
+                    return;
+                }
+
                 if (!_isRowReorderDrag)
                 {
                     if ((evt.mousePosition - _pressedMousePos).sqrMagnitude >= ReorderDragStartDistance * ReorderDragStartDistance)
@@ -947,6 +957,37 @@ namespace NoMorePain.Editor
                 }
             }
 
+            if ((evt.type == EventType.DragUpdated || evt.type == EventType.DragPerform) &&
+                TryGetFavoriteDragSourceIndex(out int favoriteDragSourceIndex))
+            {
+                _pressedRowIndex = favoriteDragSourceIndex;
+                _dragSourceIndex = favoriteDragSourceIndex;
+                _dragSourcePage = favoriteDragSourceIndex < FavoritePages.Count
+                    ? Mathf.Max(0, FavoritePages[favoriteDragSourceIndex])
+                    : Mathf.Max(0, _page);
+                _dragMousePos = evt.mousePosition;
+                _isRowReorderDrag = true;
+
+                if (!TryHandleCrossPageDragOnPager(evt.mousePosition))
+                {
+                    int localInsert = GetInsertSlotFromMouseY(listRect, rowHeight, visibleCount, evt.mousePosition.y, rowOffsetY);
+                    _dragInsertIndex = visibleStart + localInsert;
+                }
+
+                DragAndDrop.visualMode = DragAndDropVisualMode.Move;
+                EditorApplication.RepaintProjectWindow();
+
+                if (evt.type == EventType.DragPerform)
+                {
+                    DragAndDrop.AcceptDrag();
+                    DragAndDrop.SetGenericData(FavoriteDragDataKey, null);
+                    CompleteRowReorder();
+                }
+
+                evt.Use();
+                return;
+            }
+
             if (evt.type == EventType.Repaint && _isRowReorderDrag)
             {
                 DrawReorderInsertionLine(listRect, rowHeight, visibleCount, _dragInsertIndex - visibleStart, rowOffsetY);
@@ -955,31 +996,94 @@ namespace NoMorePain.Editor
 
             if (evt.type == EventType.MouseUp && evt.button == 0)
             {
-                bool hadReorderDrag = _isRowReorderDrag;
-                bool didReorder = false;
-                bool didCompact = false;
-                if (hadReorderDrag && _dragSourceIndex >= 0 && _dragSourceIndex < Favorites.Count)
-                {
-                    int targetPage = Mathf.Max(0, _page);
-                    int insert = Mathf.Clamp(_dragInsertIndex, 0, GetPageItemCount(targetPage));
-                    didReorder = MoveFavoriteItem(_dragSourceIndex, targetPage, insert);
-                }
-
-                if (hadReorderDrag)
-                    didCompact = CompactPageLayout();
-                if (didReorder || didCompact)
-                {
-                    SaveData();
-                    EditorApplication.RepaintProjectWindow();
-                }
-
-                ClearReorderState();
-                if (didReorder || didCompact)
+                if (CompleteRowReorder())
                     evt.Use();
             }
 
             if (evt.type == EventType.KeyDown && evt.keyCode == KeyCode.Escape)
                 ClearReorderState();
+        }
+
+        private static bool CompleteRowReorder()
+        {
+            bool hadReorderDrag = _isRowReorderDrag;
+            bool didReorder = false;
+            bool didCompact = false;
+            if (hadReorderDrag && _dragSourceIndex >= 0 && _dragSourceIndex < Favorites.Count)
+            {
+                int targetPage = Mathf.Max(0, _page);
+                int insert = Mathf.Clamp(_dragInsertIndex, 0, GetPageItemCount(targetPage));
+                didReorder = MoveFavoriteItem(_dragSourceIndex, targetPage, insert);
+            }
+
+            if (hadReorderDrag)
+                didCompact = CompactPageLayout();
+            if (didReorder || didCompact)
+            {
+                SaveData();
+                EditorApplication.RepaintProjectWindow();
+            }
+
+            ClearReorderState();
+            return didReorder || didCompact;
+        }
+
+        private static bool ShouldStartExternalObjectDrag(Vector2 mousePosition)
+        {
+            return !GetOverlayRect().Contains(mousePosition);
+        }
+
+        private static bool TryStartExternalObjectDrag(int itemIndex)
+        {
+            if (itemIndex < 0 || itemIndex >= Favorites.Count)
+                return false;
+
+            var item = Favorites[itemIndex];
+            if (!TryResolveObject(item, out var obj) || obj == null)
+                return false;
+
+            string favoriteKey = BuildKey(item.Guid, item.Path, item.GlobalId);
+            if (string.IsNullOrEmpty(favoriteKey))
+                return false;
+
+            DragAndDrop.PrepareStartDrag();
+            DragAndDrop.objectReferences = new[] { obj };
+            DragAndDrop.SetGenericData(FavoriteDragDataKey, favoriteKey);
+
+            string assetPath = AssetDatabase.GetAssetPath(obj);
+            DragAndDrop.paths = string.IsNullOrEmpty(assetPath)
+                ? Array.Empty<string>()
+                : new[] { assetPath };
+
+            DragAndDrop.StartDrag(GetDisplayName(item));
+            ClearReorderState();
+            return true;
+        }
+
+        private static bool HasFavoriteDragData()
+        {
+            string favoriteKey = DragAndDrop.GetGenericData(FavoriteDragDataKey) as string;
+            return !string.IsNullOrEmpty(favoriteKey);
+        }
+
+        private static bool TryGetFavoriteDragSourceIndex(out int itemIndex)
+        {
+            itemIndex = -1;
+            string favoriteKey = DragAndDrop.GetGenericData(FavoriteDragDataKey) as string;
+            if (string.IsNullOrEmpty(favoriteKey))
+                return false;
+
+            for (int i = 0; i < Favorites.Count; i++)
+            {
+                var item = Favorites[i];
+                if (!string.Equals(BuildKey(item.Guid, item.Path, item.GlobalId), favoriteKey, StringComparison.Ordinal))
+                    continue;
+
+                itemIndex = i;
+                return true;
+            }
+
+            return false;
         }
 
         private static bool TryHandleCrossPageDragOnPager(Vector2 mousePosition)
@@ -1791,6 +1895,10 @@ namespace NoMorePain.Editor
 
         private static void ClearReorderState()
         {
+            if (_rowDragControlId != 0 && GUIUtility.hotControl == _rowDragControlId)
+                GUIUtility.hotControl = 0;
+            _rowDragControlId = 0;
+
             _pressedRowIndex = -1;
             _isRowReorderDrag = false;
             _dragSourceIndex = -1;
@@ -1949,9 +2057,18 @@ namespace NoMorePain.Editor
 
         private static void HandleDragAndDrop(Rect panelRect, Event evt)
         {
+            if (evt.type == EventType.DragExited && HasFavoriteDragData())
+            {
+                ClearReorderState();
+                EditorApplication.RepaintProjectWindow();
+                return;
+            }
+
             if (evt.type != EventType.DragUpdated && evt.type != EventType.DragPerform)
                 return;
             if (!panelRect.Contains(evt.mousePosition))
+                return;
+            if (HasFavoriteDragData())
                 return;
 
             bool hasValid = false;
